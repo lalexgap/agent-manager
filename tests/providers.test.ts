@@ -29,6 +29,14 @@ describe("agentSystemPrompt", () => {
     expect(prompt).not.toContain("You are reporting to");
   });
 
+  test("recommends descriptive, globally unique agent names", () => {
+    const prompt = agentSystemPrompt("worker");
+    expect(prompt).toContain("<project>-<scope>[-<role>]");
+    expect(prompt).toContain("motel-sidebar-sort");
+    expect(prompt).toContain("api-auth-review");
+    expect(prompt).toContain("Avoid generic names");
+  });
+
   test("adds the reporting briefing only when a target is set", () => {
     const prompt = agentSystemPrompt("worker", { reportTo: "lead" });
     expect(prompt).toContain('You are reporting to "lead"');
