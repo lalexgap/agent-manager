@@ -1564,8 +1564,11 @@ export async function pick(
       activateSelection();
     };
 
-    // Ensure-then-select the fleet concierge. Ensuring (create or revive) can
-    // take a moment, so it runs deferred with a banner, like move/handoff.
+    // Ensure-then-select the fleet concierge. Ensuring (create or revive,
+    // possibly over ssh) can take a moment, so it runs deferred with a banner,
+    // like move/handoff. Selection goes by KEY, not by row: a concierge just
+    // created on a remote host isn't in the cached fleet rows yet, so waiting
+    // for (or worse, cursor-guessing) its row would select the wrong agent.
     let conciergeOpening = false;
     const openConcierge = () => {
       if (!handlers.concierge || conciergeOpening) return;
@@ -1579,14 +1582,20 @@ export async function pick(
             conciergeOpening = false;
             if (finished) return;
             feedback = null;
-            // Clear any chat-search restriction so the concierge row is
-            // actually in the visible list before the cursor tries to land.
+            // Clear filters so the concierge row is visible once it loads.
+            mode = "list";
+            filter = "";
             chatQuery = "";
             chatMatch = null;
             chatOrder = [];
             items = load();
-            jumpToPaletteAgent(key);
-            if (!finished) render();
+            cursorName = key;
+            const idx = filtered().findIndex((i) => i.name === key);
+            if (idx >= 0) cursor = idx;
+            if (!handlers.select) return finish(key);
+            feedback = asFeedback(handlers.select(key));
+            refreshActivity();
+            render();
           },
           (error: Error) => {
             conciergeOpening = false;

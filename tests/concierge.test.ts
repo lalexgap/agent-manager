@@ -1,12 +1,14 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { CONCIERGE_NAME } from "../src/providers";
-import { conciergeNewOptions } from "../src/commands/concierge";
+import { conciergeNewOptions, resolveConciergeHost } from "../src/commands/concierge";
 import { newCommand } from "../src/commands/new";
 import { renameAgent } from "../src/commands/rename";
 import { writeAgent, type AgentState } from "../src/state";
+import { configFile } from "../src/paths";
+import type { Config } from "../src/config";
 
 let home: string;
 beforeEach(() => {
@@ -17,6 +19,10 @@ afterEach(() => {
   rmSync(home, { recursive: true, force: true });
   delete process.env.AGENTMGR_HOME;
 });
+
+function writeConfig(config: Partial<Config>): void {
+  writeFileSync(configFile(), JSON.stringify(config));
+}
 
 function seedAgent(name: string, overrides: Partial<AgentState> = {}): void {
   writeAgent({
@@ -45,6 +51,29 @@ describe("conciergeNewOptions", () => {
 
   test("an operator question becomes the initial message", () => {
     expect(conciergeNewOptions("who touched the auth flow?").message).toBe("who touched the auth flow?");
+  });
+
+  test("config.conciergeProvider picks the provider", () => {
+    writeConfig({ conciergeProvider: "codex" });
+    expect(conciergeNewOptions().provider).toBe("codex");
+  });
+});
+
+describe("resolveConciergeHost", () => {
+  test("an explicit conciergeHost wins, with 'local' meaning this machine", () => {
+    writeConfig({ conciergeHost: "server" });
+    expect(resolveConciergeHost()).toBe("server");
+    writeConfig({ conciergeHost: "local" });
+    expect(resolveConciergeHost()).toBeUndefined();
+  });
+
+  test("without config, an existing local concierge is adopted", () => {
+    seedAgent(CONCIERGE_NAME);
+    expect(resolveConciergeHost()).toBeUndefined();
+  });
+
+  test("without config and no concierge anywhere, it is created locally", () => {
+    expect(resolveConciergeHost()).toBeUndefined();
   });
 });
 

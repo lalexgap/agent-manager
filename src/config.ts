@@ -28,6 +28,14 @@ export interface Config {
   // ssh host aliases whose agents appear alongside local ones in ls, the
   // picker, and the hub (each must have am installed and on PATH).
   remotes?: string[];
+  // Provider the fleet concierge runs on. Applies when the concierge is
+  // created; to switch an existing one, `am rm concierge` and reopen it.
+  conciergeProvider: Provider;
+  // Where the fleet concierge lives: "local" or an ssh host alias (usually one
+  // of `remotes`). Every machine with the same value routes `am concierge` and
+  // the hub's `c` key to that single agent. Unset = adopt an existing
+  // concierge anywhere in the fleet (local first), create locally otherwise.
+  conciergeHost?: string;
   // Spawn agents into a fresh git worktree (branch am/<name>) when the
   // target dir is a repo, instead of assuming ownership of the checkout.
   // Per-agent opt-out: am new --in-place.
@@ -75,6 +83,7 @@ export interface Config {
 
 const DEFAULTS: Config = {
   defaultProvider: "claude",
+  conciergeProvider: "claude",
   notifyOnIdle: true,
   idleNotifyMinSeconds: 30,
   remoteControl: true,
