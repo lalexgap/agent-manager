@@ -15,6 +15,7 @@ import { acquireDeliverLock, releaseDeliverLock } from "../deliver";
 import { queueAppend, queueStorageExists, renameQueue } from "../queue";
 import { renameSnapshot, snapshotExists } from "../snapshots";
 import { hasSession, renameSession, sessionName } from "../tmux";
+import { CONCIERGE_NAME } from "../providers";
 
 export interface RenameResult {
   oldName: string;
@@ -63,6 +64,15 @@ export async function renameAgent(prefix: string, newName: string): Promise<Rena
   const agent = resolveAgent(prefix);
   const oldName = agent.name;
   if (newName === oldName) return { oldName, newName, live: hasSession(agent.tmuxSession), worktreeBranch: agent.worktreeBranch };
+  // The concierge is a reserved singleton keyed by its name: renaming another
+  // agent onto it would squat the identity, and renaming it away would strand
+  // `am concierge` behind the retained alias.
+  if (newName === CONCIERGE_NAME) {
+    throw new Error(`"${CONCIERGE_NAME}" is reserved for the fleet concierge — open it with \`am concierge\``);
+  }
+  if (oldName === CONCIERGE_NAME) {
+    throw new Error(`the fleet concierge cannot be renamed — remove it with \`am rm ${CONCIERGE_NAME}\` if you no longer want it`);
+  }
 
   const owner = agentNameOwner(newName);
   if (owner && owner.name !== oldName) {

@@ -82,6 +82,9 @@ export interface PickerHandlers {
   // Prefill for the create flow's directory prompt, given the currently
   // highlighted agent (related work usually lives in the same project).
   defaultDir?: (highlighted: string | null) => string;
+  // Ensure the fleet concierge exists (created or revived as needed) and
+  // resolve with its picker key; the picker then selects it like any row.
+  concierge?: () => string | Promise<string>;
   // Persistent mode (am ui sidebar): enter calls select instead of resolving
   // the picker, esc calls quit, and the picker keeps running. Returns
   // optional banner feedback.
@@ -688,6 +691,7 @@ function keyBarHints(mode: Mode, handlers: PickerHandlers, active: boolean): { l
       { key: "↑↓", label: "preview" },
       { key: "⏎", label: handlers.select ? "lock in" : "jump" },
       ...(handlers.create ? [{ key: "n", label: "new" }] : []),
+      ...(handlers.concierge ? [{ key: "c", label: "concierge" }] : []),
       { key: "f", label: "filter" },
       ...(handlers.regroup ? [{ key: "g", label: "group" }] : []),
       ...(handlers.resort ? [{ key: "s", label: "sort" }] : []),
@@ -904,6 +908,7 @@ export async function pick(
         shortcut: "enter",
       },
       handlers.create && { id: "create", label: "Create agent", keywords: "new spawn", shortcut: "n" },
+      handlers.concierge && { id: "concierge", label: "Ask the concierge", keywords: "assistant fleet manage status find which agent question", shortcut: "c" },
       { id: "filter", label: "Filter agents", keywords: "find name task", shortcut: "f" },
       { id: "search", label: "Search conversations", keywords: "chat transcript history", shortcut: "/" },
       {
@@ -1274,6 +1279,7 @@ export async function pick(
         "",
         `${THEME.muted}FLEET${THEME.sidebar}`,
         ...(handlers.create ? [`${key("n")} create agent`] : []),
+        ...(handlers.concierge ? [`${key("c")} ask the concierge`] : []),
         `${key("f")} filter names/tasks`,
         `${key("/")} search conversations`,
         `${key("ctrl-k")} command palette`,
@@ -1558,6 +1564,48 @@ export async function pick(
       activateSelection();
     };
 
+    // Ensure-then-select the fleet concierge. Ensuring (create or revive,
+    // possibly over ssh) can take a moment, so it runs deferred with a banner,
+    // like move/handoff. Selection goes by KEY, not by row: a concierge just
+    // created on a remote host isn't in the cached fleet rows yet, so waiting
+    // for (or worse, cursor-guessing) its row would select the wrong agent.
+    let conciergeOpening = false;
+    const openConcierge = () => {
+      if (!handlers.concierge || conciergeOpening) return;
+      conciergeOpening = true;
+      feedback = { text: "opening the concierge…", level: "info" };
+      render();
+      Promise.resolve()
+        .then(handlers.concierge)
+        .then(
+          (key) => {
+            conciergeOpening = false;
+            if (finished) return;
+            feedback = null;
+            // Clear filters so the concierge row is visible once it loads.
+            mode = "list";
+            filter = "";
+            chatQuery = "";
+            chatMatch = null;
+            chatOrder = [];
+            items = load();
+            cursorName = key;
+            const idx = filtered().findIndex((i) => i.name === key);
+            if (idx >= 0) cursor = idx;
+            if (!handlers.select) return finish(key);
+            feedback = asFeedback(handlers.select(key));
+            refreshActivity();
+            render();
+          },
+          (error: Error) => {
+            conciergeOpening = false;
+            if (finished) return;
+            feedback = { text: error.message, level: "error" };
+            render();
+          },
+        );
+    };
+
     // Execute a palette command by id — shared by the popup overlay (result
     // arrives from the `am __palette` process) and the in-picker fallback.
     const runPaletteCommand = (id: string) => {
@@ -1569,6 +1617,10 @@ export async function pick(
           break;
         case "create":
           beginCreate();
+          break;
+        case "concierge":
+          mode = "list";
+          openConcierge();
           break;
         case "filter":
           mode = "filter";
@@ -2090,6 +2142,8 @@ export async function pick(
         feedback = null;
       } else if ((key === "\x0e" || key === "n") && handlers.create) {
         beginCreate();
+      } else if (key === "c" && handlers.concierge) {
+        openConcierge();
       } else if (key === "a") {
         showAll = !showAll;
         feedback = null;

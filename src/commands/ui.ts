@@ -12,6 +12,7 @@ import { pick, type Feedback, type PaletteResult, type PaletteSpec, type PickerH
 import { displayStatus, relativeTime, shortenHome, STATUS_ICONS } from "./ls";
 import { queueDepth } from "../queue";
 import { newCommand } from "./new";
+import { ensureConcierge } from "./concierge";
 import { destroyAgent, stopAgent } from "./rm";
 import { reviveAgent } from "./resume";
 import { readLastAttached } from "../state";
@@ -399,6 +400,7 @@ export async function sidebarCommand(): Promise<void> {
       const agent = !host && name ? readAgent(name) : null;
       return shortenHome(agent?.dir ?? process.cwd());
     },
+    concierge: async () => (await ensureConcierge()).key,
     move: moveHandler,
     clone: cloneHandler,
     handoff: handoffHandler,
