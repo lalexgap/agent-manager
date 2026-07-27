@@ -21,6 +21,8 @@ import { peekCommand } from "./commands/peek";
 import { jumpCommand, jumpPreviousCommand } from "./commands/jump";
 import { hookCommand } from "./commands/hook";
 import { resumeCommand, reviveAgent } from "./commands/resume";
+import { conciergeCommand, ensureConcierge } from "./commands/concierge";
+import { CONCIERGE_NAME } from "./providers";
 import { transcriptCommand } from "./commands/transcript";
 import { searchCommand } from "./commands/search";
 import { handoffCommand } from "./commands/handoff";
@@ -80,6 +82,12 @@ usage:
   am ls [--json]              list agents with status and queue depth
   am summary [--json]         prioritized fleet report: attention, active,
                               idle, exited, and unreachable hosts
+  am concierge [question...]  open the fleet concierge: a reserved Claude
+                              agent whose only job is fleet management —
+                              "which agent worked on X?", status summaries,
+                              safe revives and routing. Created on first use,
+                              revived automatically (press c in the hub;
+                              --no-jump queues the question and stays)
   am send <name> <msg...>     queue a message, delivered when agent goes idle
   am send <name> <msg> --now  type it into the session immediately (steer)
   am send <name> -            read the message body from stdin (no shell quoting
@@ -380,6 +388,10 @@ async function pickerFlow(): Promise<void> {
       const agent = !host && name ? readAgent(name) : null;
       return shortenHome(agent?.dir ?? process.cwd());
     },
+    concierge: async () => {
+      await ensureConcierge();
+      return CONCIERGE_NAME;
+    },
     move: moveHandler,
     clone: cloneHandler,
     handoff: handoffHandler,
@@ -497,6 +509,12 @@ async function main(): Promise<void> {
       break;
     case "summary":
       summaryCommand({ json: !!args.flags.json, localOnly: !!args.flags["local-only"] });
+      break;
+    case "concierge":
+      await conciergeCommand({
+        question: args.positional.join(" ") || ((args.flags.m ?? args.flags.message) as string | undefined),
+        jump: args.flags["no-jump"] ? false : undefined,
+      });
       break;
     case "j":
     case "jump":

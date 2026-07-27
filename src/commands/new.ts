@@ -9,6 +9,7 @@ import { queueAppend, queueClear } from "../queue";
 import {
   agentSystemPrompt,
   buildLaunchCommand,
+  CONCIERGE_NAME,
   conversationArgs,
   remoteControlArgs,
   scrubNestedSessionEnv,
@@ -86,12 +87,17 @@ export interface NewOptions {
   report?: boolean;
   // Suppress console output (used by the picker, which owns the screen).
   quiet?: boolean;
+  // Set only by ensureConcierge: allows creating the reserved concierge agent.
+  concierge?: boolean;
 }
 
 export async function newCommand(opts: NewOptions): Promise<void> {
   const { name } = opts;
   if (!/^[a-zA-Z0-9_-]+$/.test(name)) {
     throw new Error("agent name must be alphanumeric with dashes/underscores");
+  }
+  if (name === CONCIERGE_NAME && !opts.concierge) {
+    throw new Error(`"${CONCIERGE_NAME}" is reserved for the fleet concierge — open it with \`am concierge\` (c in the hub)`);
   }
   const owner = agentNameOwner(name);
   if (owner) {

@@ -4,6 +4,7 @@ import {
   buildLaunchCommand,
   buildResumeCommand,
   codexConversationArgs,
+  CONCIERGE_NAME,
 } from "../src/providers";
 import type { AgentState } from "../src/state";
 
@@ -41,6 +42,32 @@ describe("agentSystemPrompt", () => {
     const prompt = agentSystemPrompt("worker", { reportTo: "lead" });
     expect(prompt).toContain('You are reporting to "lead"');
     expect(prompt).toContain('am send lead');
+  });
+
+  test("the reserved concierge name selects the fleet-management prompt", () => {
+    const prompt = agentSystemPrompt(CONCIERGE_NAME);
+    expect(prompt).toContain("concierge");
+    expect(prompt).toContain("not a coding agent");
+    // Teaches the discovery surface…
+    expect(prompt).toContain("am summary");
+    expect(prompt).toContain("am search");
+    expect(prompt).toContain("am transcript");
+    expect(prompt).toContain("am peek");
+    // …and the confirmation boundary for destructive actions.
+    expect(prompt).toContain("explicitly asked");
+    expect(prompt).toContain("--clean");
+    // The generic managed-agent naming/spawning guidance is replaced wholesale.
+    expect(prompt).not.toContain("<project>-<scope>[-<role>]");
+  });
+
+  test("resuming the concierge re-applies the concierge prompt", () => {
+    const plan = buildResumeCommand(
+      "claude",
+      agent({ name: CONCIERGE_NAME, sessionId: "id-9", tmuxSession: `agentmgr-${CONCIERGE_NAME}` }),
+      { remote: false },
+    );
+    const idx = plan.command.indexOf("--append-system-prompt");
+    expect(plan.command[idx + 1]).toContain("front desk");
   });
 });
 
