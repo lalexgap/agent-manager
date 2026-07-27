@@ -1,5 +1,6 @@
 import { basename } from "node:path";
 import { agentRows, cachedGitDiffSummary, relativeTime, shortenHome, STATUS_COLORS, STATUS_ICONS, type AgentRow } from "./commands/ls";
+import { CONCIERGE_NAME } from "./providers";
 import { loadConfig } from "./config";
 import { sshAm, sshAmAsync, sshRun } from "./remote";
 import { splitAddr } from "./comms";
@@ -263,6 +264,22 @@ const MUTED = "\x1b[38;2;86;95;137m";
 // purple, codex is muted and brightens to blue on the selection fill.
 const BLUE = "\x1b[38;2;122;162;247m";
 const PURPLE = "\x1b[38;2;187;154;247m";
+const CYAN = "\x1b[38;2;125;207;255m";
+
+// The concierge is part of the management UI rather than the workload, so its
+// row is marked everywhere it renders (sidebar, classic picker, palette): a ✦
+// ahead of the name and the cyan identity color — it's idle most of the time,
+// and the mark is what keeps it findable then. Status still wins where it
+// carries signal: needs-attention stays amber, a gone session goes muted.
+export function conciergeRow(row: { name: string; status: AgentRow["status"] }): { label: string; labelStyle: string; role: string } | null {
+  if (row.name !== CONCIERGE_NAME) return null;
+  const labelStyle = row.status === "needs-attention"
+    ? AMBER
+    : row.status === "exited" || row.status === "dead"
+      ? MUTED
+      : CYAN;
+  return { label: `✦ ${CONCIERGE_NAME}`, labelStyle, role: "fleet concierge" };
+}
 
 export function sidebarStatus(status: AgentRow["status"]): string {
   if (status === "needs-attention") return "needs you";
@@ -294,6 +311,7 @@ export function fleetPickerItems(): PickerItem[] {
   );
   const sorted = sortFleetRows(withDiff, groupMode, sortMode);
   const items: PickerItem[] = sorted.map((r) => {
+    const concierge = conciergeRow(r);
     return {
       name: fleetKey(r),
       section: sectionFor(r, groupMode),
@@ -302,14 +320,16 @@ export function fleetPickerItems(): PickerItem[] {
       iconStyle: STATUS_COLORS[r.status],
       status: r.status,
       statusLabel: sidebarStatus(r.status),
-      label: r.name,
-      labelStyle: r.status === "needs-attention" ? AMBER : r.status === "idle" ? MUTED : FG,
+      label: concierge?.label ?? r.name,
+      labelStyle: concierge?.labelStyle ?? (r.status === "needs-attention" ? AMBER : r.status === "idle" ? MUTED : FG),
       badge: r.provider === "codex" ? "cdx" : "cld",
       badgeStyle: r.provider === "codex" ? MUTED : PURPLE,
       badgeSelectedStyle: r.provider === "codex" ? BLUE : PURPLE,
       queueDepth: r.queued,
-      search: `${r.task ?? ""} ${shortenHome(r.dir)} ${r.provider} ${r.host ?? "local"}`,
+      // "front desk"/"assistant" make palette queries find the concierge.
+      search: `${r.task ?? ""} ${shortenHome(r.dir)} ${r.provider} ${r.host ?? "local"}${concierge ? " front desk assistant" : ""}`,
       meta: [
+        ...(concierge ? [`role     ${CYAN}${concierge.role}${FG}`] : []),
         `host     ${r.host ?? "local"}`,
         `provider ${r.provider}`,
         r.worktreeBranch ? `branch   ${r.worktreeBranch}` : `dir      ${shortenHome(r.dir)}`,
