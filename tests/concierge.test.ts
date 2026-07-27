@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { CONCIERGE_NAME } from "../src/providers";
+import { conciergeRow } from "../src/fleet";
 import { conciergeNewOptions, resolveConciergeHost } from "../src/commands/concierge";
 import { newCommand } from "../src/commands/new";
 import { renameAgent } from "../src/commands/rename";
@@ -56,6 +57,24 @@ describe("conciergeNewOptions", () => {
   test("config.conciergeProvider picks the provider", () => {
     writeConfig({ conciergeProvider: "codex" });
     expect(conciergeNewOptions().provider).toBe("codex");
+  });
+});
+
+describe("conciergeRow", () => {
+  test("marks only the concierge, with a ✦ and a role line", () => {
+    expect(conciergeRow({ name: "worker", status: "idle" })).toBeNull();
+    const row = conciergeRow({ name: CONCIERGE_NAME, status: "idle" })!;
+    expect(row.label).toBe(`✦ ${CONCIERGE_NAME}`);
+    expect(row.role).toBe("fleet concierge");
+    // Idle is the concierge's usual state — the identity cyan keeps it findable.
+    expect(row.labelStyle).toContain("125;207;255");
+  });
+
+  test("status colors still win where they carry signal", () => {
+    expect(conciergeRow({ name: CONCIERGE_NAME, status: "needs-attention" })!.labelStyle).toContain("224;175;104");
+    expect(conciergeRow({ name: CONCIERGE_NAME, status: "exited" })!.labelStyle).toContain("86;95;137");
+    expect(conciergeRow({ name: CONCIERGE_NAME, status: "dead" })!.labelStyle).toContain("86;95;137");
+    expect(conciergeRow({ name: CONCIERGE_NAME, status: "working" })!.labelStyle).toContain("125;207;255");
   });
 });
 
