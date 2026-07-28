@@ -59,6 +59,17 @@ export function matchesPickerRole(item: PickerItem, role: string | null): boolea
   return role === "unassigned" ? !item.role : item.role === role;
 }
 
+export function visibleItemsForRole(
+  items: PickerItem[],
+  filter: string,
+  showAll: boolean,
+  role: string | null,
+): PickerItem[] {
+  // Choosing a role is an explicit search, just like typing a text filter, so
+  // matching exited agents should not disappear behind the default view.
+  return visibleItems(items, filter, showAll || !!role).filter((item) => matchesPickerRole(item, role));
+}
+
 // Action results render as a colored banner under the header. A bare string
 // is treated as a success; tag a severity to render it red (error), yellow
 // (warn/confirm), or dim (info/in-progress) instead.
@@ -922,7 +933,7 @@ export async function pick(
         .filter(matchesRole)
         .map((i) => ({ ...i, meta: [`match    ${chatMatch!.get(i.name) ?? ""}`, ...(i.meta ?? [])] }));
     }
-    return visibleItems(items, filter, showAll).filter(matchesRole);
+    return visibleItemsForRole(items, filter, showAll, roleFilter);
   };
 
   const paletteCommands = (): PaletteCommand[] => {

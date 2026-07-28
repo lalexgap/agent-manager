@@ -13,6 +13,7 @@ import {
   renamedPickerKey,
   splitKeys,
   tmuxKeyBar,
+  visibleItemsForRole,
   visibleWidth,
   wrapTokens,
 } from "../src/picker";
@@ -41,6 +42,12 @@ describe("role filtering", () => {
     expect(matchesPickerRole(items[2]!, null)).toBe(true);
     expect(matchesPickerRole(items[2]!, "unassigned")).toBe(false);
     expect(matchesPickerRole(items[0]!, "reviewer")).toBe(true);
+  });
+
+  test("an active role filter reveals matching exited agents", () => {
+    const exited = { name: "old-review", label: "old-review", role: "reviewer", secondary: true };
+    expect(visibleItemsForRole([exited], "", false, null)).toEqual([]);
+    expect(visibleItemsForRole([exited], "", false, "reviewer")).toEqual([exited]);
   });
 });
 
