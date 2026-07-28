@@ -15,6 +15,7 @@ import {
   scrubNestedSessionEnv,
 } from "../providers";
 import { ensureCodexHooks } from "../codexHooks";
+import { CONCIERGE_ROLE, requireRole } from "../roles";
 
 // These grew provider-awareness and moved to providers.ts; re-exported so
 // existing imports keep working.
@@ -70,6 +71,10 @@ export interface NewOptions {
   model?: string;
   // Optional reasoning-effort override; undefined = the provider default.
   effort?: string;
+  role?: string;
+  // Internal lifecycle override: preserve the original role snapshot even if
+  // the registry changed since the source agent was created.
+  roleInstructions?: string;
   // Adopt an existing conversation: a session id, or `true` to open the
   // provider's interactive session picker inside the new agent.
   resume?: string | boolean;
@@ -99,6 +104,9 @@ export async function newCommand(opts: NewOptions): Promise<void> {
   if (name === CONCIERGE_NAME && !opts.concierge) {
     throw new Error(`"${CONCIERGE_NAME}" is reserved for the fleet concierge — open it with \`am concierge\` (c in the hub)`);
   }
+  if (opts.role === CONCIERGE_ROLE && !opts.concierge) {
+    throw new Error(`role "${CONCIERGE_ROLE}" is reserved for the fleet concierge — open it with \`am concierge\``);
+  }
   const owner = agentNameOwner(name);
   if (owner) {
     if (owner.name === name) throw new Error(`agent "${name}" already exists — restart it with \`am resume ${name}\``);
@@ -107,6 +115,10 @@ export async function newCommand(opts: NewOptions): Promise<void> {
   const session = sessionName(name);
   if (hasSession(session)) throw new Error(`tmux session ${session} already exists`);
   const provider = opts.provider ?? loadConfig().defaultProvider;
+  const role = opts.role
+    ? (opts.roleInstructions ? { name: opts.role, instructions: opts.roleInstructions } : requireRole(opts.role))
+    : undefined;
+  const roleInstructions = opts.roleInstructions ?? role?.instructions;
   // Fail loudly now rather than spawning a tmux session that dies instantly
   // ("command not found" with no surviving error) — bit handoffs on machines
   // without the other provider installed.
@@ -150,7 +162,12 @@ export async function newCommand(opts: NewOptions): Promise<void> {
     console.error("warning: --report but no spawning agent — set a target with --report-to <name>");
   }
 
-  const plan = buildLaunchCommand(provider, name, { ...opts, reportTo });
+  const plan = buildLaunchCommand(provider, name, {
+    ...opts,
+    reportTo,
+    role: role?.name,
+    roleInstructions,
+  });
 
   const now = new Date().toISOString();
   const state: AgentState = {
@@ -165,6 +182,8 @@ export async function newCommand(opts: NewOptions): Promise<void> {
     worktreeBranch,
     repoRoot,
     task: opts.message,
+    role: role?.name,
+    roleInstructions,
     reportTo,
     spawnedBy,
     createdAt: now,

@@ -6,6 +6,7 @@ import { startApiServer, loadApiToken, createApiToken, type ApiServerHandle } fr
 import { readAgent, writeAgent } from "../src/state";
 import { queueAppend } from "../src/queue";
 import { daemonRequest, startDaemonServer } from "../src/daemon";
+import { addRole } from "../src/roles";
 
 let home: string;
 let server: ApiServerHandle;
@@ -87,6 +88,13 @@ describe("agents api", () => {
     expect(data.unreachable).toEqual([]);
   });
 
+  test("GET /api/roles lists built-in and custom definitions", async () => {
+    addRole({ name: "reviewer", instructions: "Review changes." });
+    const res = await fetch(url("/api/roles"), auth());
+    const data = (await res.json()) as any;
+    expect(data.roles.map((role: any) => role.name)).toEqual(["concierge", "reviewer"]);
+  });
+
   test("GET /api/summary returns the prioritized fleet report", async () => {
     seedAgent("alpha", "working");
     const res = await fetch(url("/api/summary"), auth());
@@ -98,11 +106,13 @@ describe("agents api", () => {
   });
 
   test("GET /api/agents/:name returns detail + queue", async () => {
-    seedAgent("beta");
+    const now = new Date().toISOString();
+    writeAgent({ name: "beta", role: "reviewer", status: "idle", dir: "/tmp", tmuxSession: "agentmgr-beta", createdAt: now, updatedAt: now });
     queueAppend("beta", "hello");
     const res = await fetch(url("/api/agents/beta"), auth());
     const data = (await res.json()) as any;
     expect(data.name).toBe("beta");
+    expect(data.role).toBe("reviewer");
     expect(data.queue).toHaveLength(1);
     expect(data.queue[0].message).toBe("hello");
     expect(data.pane).toBeNull(); // no live session

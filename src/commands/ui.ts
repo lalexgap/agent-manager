@@ -17,6 +17,7 @@ import { destroyAgent, stopAgent } from "./rm";
 import { reviveAgent } from "./resume";
 import { readLastAttached } from "../state";
 import { ensureDaemon, watchDaemonEvents } from "../daemon";
+import { CONCIERGE_ROLE, listRoles } from "../roles";
 
 // Persistent split view: a hub tmux session whose left pane runs the sidebar
 // (`am __sidebar`) and whose right pane shows the selected agent via a nested
@@ -367,6 +368,7 @@ export async function sidebarCommand(): Promise<void> {
       provider: string | undefined,
       model: string | undefined,
       effort: string | undefined,
+      role: string | undefined,
     ) => {
       if (host) {
         // Spawn on the remote via its own am; dir (if given) is a path on that
@@ -377,6 +379,7 @@ export async function sidebarCommand(): Promise<void> {
         if (provider === "codex") args.push("--codex");
         if (model) args.push("--model", model);
         if (effort) args.push("--effort", effort);
+        if (role) args.push("--role", role);
         const res = sshAm(host, args);
         if (res.exitCode !== 0) throw new Error(res.stderr.trim() || `remote new on ${host} failed`);
         return `${host}:${name}`;
@@ -388,6 +391,7 @@ export async function sidebarCommand(): Promise<void> {
         provider: provider as Provider | undefined,
         model,
         effort,
+        role,
         jump: false,
         quiet: true,
       });
@@ -406,7 +410,12 @@ export async function sidebarCommand(): Promise<void> {
     handoff: handoffHandler,
     rename: renameHandler,
     regroup: () => `grouped by ${toggleGroupMode() === "dir" ? "directory" : "host"}`,
-    resort: () => toggleSortMode() === "recent" ? "sorted by most recent activity within groups" : "sorted by status within groups",
+    resort: () => {
+      const mode = toggleSortMode();
+      return mode === "recent"
+        ? "sorted by most recent activity within groups"
+        : mode === "role" ? "sorted by role within groups" : "sorted by status within groups";
+    },
     cd: cdHandler,
     cdPrefill: (key: string) => {
       const { host, name } = splitFleetKey(key);
@@ -415,6 +424,7 @@ export async function sidebarCommand(): Promise<void> {
     },
     defaultProvider: config.defaultProvider,
     worktreeByDefault: config.worktreeByDefault,
+    roleOptions: () => listRoles().filter((role) => role.name !== CONCIERGE_ROLE),
 
     quit: () => {
       tmux("detach-client", "-s", `=${HUB_SESSION}`);

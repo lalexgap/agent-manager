@@ -61,6 +61,15 @@ describe("fleet summary", () => {
     expect(text).toContain("2 queued");
   });
 
+  test("carries roles into JSON and the human report", () => {
+    const summary = buildFleetSummary({
+      rows: [row("audit", "working", { role: "security-reviewer" })],
+      unreachable: [],
+    }, NOW);
+    expect(summary.active[0]?.role).toBe("security-reviewer");
+    expect(formatFleetSummary(summary).join("\n")).toContain("working · security-reviewer");
+  });
+
   test("collapses historical exited agents in the human report", () => {
     const summary = buildFleetSummary({
       rows: [row("old-agent", "exited"), row("current", "working")],

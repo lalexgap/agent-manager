@@ -45,6 +45,7 @@ describe("conciergeNewOptions", () => {
     expect(opts.dir).toBe(homedir());
     expect(opts.inPlace).toBe(true);
     expect(opts.concierge).toBe(true);
+    expect(opts.role).toBe("concierge");
     expect(opts.jump).toBe(false);
     // With no question, the first turn is a fleet status report.
     expect(opts.message).toContain("fleet status");
@@ -68,6 +69,10 @@ describe("conciergeRow", () => {
     expect(row.role).toBe("fleet concierge");
     // Idle is the concierge's usual state — the identity cyan keeps it findable.
     expect(row.labelStyle).toContain("125;207;255");
+  });
+
+  test("the built-in role drives the treatment for role-aware state", () => {
+    expect(conciergeRow({ name: "legacy-name", role: "concierge", status: "idle" })?.label).toBe("✦ concierge");
   });
 
   test("status colors still win where they carry signal", () => {
@@ -99,6 +104,10 @@ describe("resolveConciergeHost", () => {
 describe("concierge name reservation", () => {
   test("am new rejects the reserved name and points at am concierge", async () => {
     await expect(newCommand({ name: CONCIERGE_NAME })).rejects.toThrow(/reserved.*am concierge/);
+  });
+
+  test("am new rejects direct use of the built-in concierge role", async () => {
+    await expect(newCommand({ name: "helper", role: "concierge" })).rejects.toThrow(/reserved.*am concierge/);
   });
 
   test("renaming another agent onto the reserved name is rejected", async () => {

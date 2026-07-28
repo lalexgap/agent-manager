@@ -5,6 +5,7 @@ import { agentProvider, agentSessionId, listAgents, type AgentState, type Provid
 import { claudeProjectSlug } from "../transcript";
 import { queueDepth } from "../queue";
 import { capturePane, hasSession, stripSgr } from "../tmux";
+import { roleForAgent } from "../roles";
 
 export type DisplayStatus = AgentState["status"] | "dead" | "waiting";
 
@@ -205,6 +206,7 @@ export interface AgentRow {
   worktreeBranch?: string;
   createdAt?: string;
   reportTo?: string;
+  role?: string;
   // The agent that spawned this one (AGENTMGR_AGENT at `am new`). Surfaced as
   // the "parent" line in the sidebar; absent for human-spawned agents.
   spawnedBy?: string;
@@ -298,10 +300,12 @@ export function cachedGitDiffSummary(dir: string): DiffSummary | null | undefine
 export function agentRows(): AgentRow[] {
   return listAgents().map((a) => {
     const status = displayStatus(a);
+    const { roleInstructions: _roleInstructions, ...visible } = a;
     return {
-      ...a,
+      ...visible,
       status,
       provider: agentProvider(a),
+      role: roleForAgent(a),
       queued: queueDepth(a.name),
       // waitingInfo is cached, so this second call is free.
       statusDetail: status === "waiting" ? waitingInfo(a).detail : undefined,
@@ -317,24 +321,53 @@ export function formatRows(rows: (AgentRow & { host?: string })[]): string[] {
   const withHost = rows.some((r) => r.host);
   const hostWidth = withHost ? Math.max(4, ...rows.map((r) => (r.host ?? "local").length)) : 0;
   const hostHeader = withHost ? `${"HOST".padEnd(hostWidth)}  ` : "";
+  const roleWidth = Math.max(4, ...rows.map((r) => (r.role ?? "–").length));
   const lines = [
-    `  ${"NAME".padEnd(nameWidth)}  ${hostHeader}${"STATUS".padEnd(statusWidth)}  AGENT   QUEUED  ACTIVITY  DIR`,
+    `  ${"NAME".padEnd(nameWidth)}  ${hostHeader}${"STATUS".padEnd(statusWidth)}  AGENT   ${"ROLE".padEnd(roleWidth)}  QUEUED  ACTIVITY  DIR`,
   ];
   for (const r of rows) {
     const queued = r.queued > 0 ? String(r.queued) : "–";
     const host = withHost ? `${(r.host ?? "local").padEnd(hostWidth)}  ` : "";
     lines.push(
-      `${STATUS_ICONS[r.status]} ${r.name.padEnd(nameWidth)}  ${host}${statusOf(r).padEnd(statusWidth)}  ${r.provider.padEnd(6)}  ${queued.padEnd(6)}  ${relativeTime(r.updatedAt).padEnd(8)}  ${shortenHome(r.dir)}`,
+      `${STATUS_ICONS[r.status]} ${r.name.padEnd(nameWidth)}  ${host}${statusOf(r).padEnd(statusWidth)}  ${r.provider.padEnd(6)}  ${(r.role ?? "–").padEnd(roleWidth)}  ${queued.padEnd(6)}  ${relativeTime(r.updatedAt).padEnd(8)}  ${shortenHome(r.dir)}`,
     );
   }
   return lines;
 }
 
-export function lsCommand(opts: { json: boolean; localOnly?: boolean }): void {
+export type LsSort = "status" | "recent" | "role";
+
+export function filterRowsByRole<T extends { role?: string }>(rows: T[], role?: string): T[] {
+  if (!role) return rows;
+  return rows.filter((row) => role === "unassigned" ? !row.role : row.role === role);
+}
+
+export function sortLsRows<T extends AgentRow & { host?: string }>(rows: T[], sort?: string): T[] {
+  if (!sort) return rows;
+  if (sort !== "status" && sort !== "recent" && sort !== "role") {
+    throw new Error(`--sort must be status, recent, or role, got "${sort}"`);
+  }
+  const priority: Record<AgentRow["status"], number> = {
+    "needs-attention": 0, working: 1, waiting: 2, starting: 3, idle: 4, exited: 5, dead: 6,
+  };
+  return [...rows].sort((a, b) => {
+    if (sort === "recent") return Date.parse(b.updatedAt) - Date.parse(a.updatedAt) || a.name.localeCompare(b.name);
+    if (sort === "role") {
+      if (!!a.role !== !!b.role) return a.role ? -1 : 1;
+      return (a.role ?? "").localeCompare(b.role ?? "")
+        || priority[a.status] - priority[b.status]
+        || a.name.localeCompare(b.name);
+    }
+    return priority[a.status] - priority[b.status] || a.name.localeCompare(b.name);
+  });
+}
+
+export function lsCommand(opts: { json: boolean; localOnly?: boolean; role?: string; sort?: string }): void {
   // Imported lazily to keep ls.ts free of a fleet→ls→fleet import cycle at
   // module-eval time (fleet imports agentRows from here).
   const { fleetRows } = require("../fleet") as typeof import("../fleet");
   const fleet = fleetRows({ localOnly: opts.localOnly });
+  fleet.rows = sortLsRows(filterRowsByRole(fleet.rows, opts.role), opts.sort);
   if (opts.json) {
     // Diff stats ride along in the JSON: the hub polls remote fleets through
     // `am ls --json --local-only` over ssh, and only this process can see this

@@ -44,6 +44,10 @@ export interface AgentState {
   transcriptPath?: string;
   // The initial -m message: what this agent is for. Searchable in the picker.
   task?: string;
+  // Optional named behavior preset. Instructions are snapshotted so resumes,
+  // moves, and handoffs keep their behavior if the registry later changes.
+  role?: string;
+  roleInstructions?: string;
   // Set when a turn starts, used to measure the work stint for idle
   // notifications.
   workingSince?: string;

@@ -17,6 +17,10 @@ export function agentsDir(): string {
   return join(baseDir(), "agents");
 }
 
+export function rolesDir(): string {
+  return join(baseDir(), "roles");
+}
+
 export function queueDir(): string {
   return join(baseDir(), "queue");
 }
@@ -122,7 +126,7 @@ export function apiTokenFile(): string {
 }
 
 export function ensureDirs(): void {
-  for (const dir of [agentsDir(), queueDir(), worktreesDir(), snapshotsDir(), handoffsDir()]) {
+  for (const dir of [agentsDir(), rolesDir(), queueDir(), worktreesDir(), snapshotsDir(), handoffsDir()]) {
     mkdirSync(dir, { recursive: true });
   }
 }

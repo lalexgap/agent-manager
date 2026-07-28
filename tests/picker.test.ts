@@ -132,6 +132,11 @@ describe("formFields", () => {
     expect(formFields(false)).toEqual(["name", "task", "dir", "provider", "model", "effort"]);
     expect(formFields(true)).toEqual(["name", "task", "where", "dir", "provider", "model", "effort"]);
   });
+
+  test("adds a role selector only when custom roles exist", () => {
+    expect(formFields(false, true)).toEqual(["name", "task", "dir", "role", "provider", "model", "effort"]);
+    expect(formFields(true, true)).toEqual(["name", "task", "where", "dir", "role", "provider", "model", "effort"]);
+  });
 });
 
 describe("renamedPickerKey", () => {

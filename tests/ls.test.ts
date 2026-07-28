@@ -1,7 +1,30 @@
 import { describe, expect, test } from "bun:test";
-import { paneWaitingInfo } from "../src/commands/ls";
+import { filterRowsByRole, paneWaitingInfo, sortLsRows, type AgentRow } from "../src/commands/ls";
 
 const SEP = "─".repeat(40);
+
+function row(name: string, role: string | undefined, status: AgentRow["status"] = "idle", updatedAt = "2026-01-01T00:00:00Z"): AgentRow {
+  return { name, role, status, updatedAt, statusChangedAt: updatedAt, provider: "claude", queued: 0, dir: "/tmp" };
+}
+
+describe("role filtering and sorting", () => {
+  const rows = [row("zeta", undefined), row("beta", "reviewer", "idle"), row("alpha", "builder", "working")];
+
+  test("filters an assigned role or explicitly unassigned agents", () => {
+    expect(filterRowsByRole(rows, "reviewer").map((item) => item.name)).toEqual(["beta"]);
+    expect(filterRowsByRole(rows, "unassigned").map((item) => item.name)).toEqual(["zeta"]);
+    expect(filterRowsByRole(rows).map((item) => item.name)).toEqual(["zeta", "beta", "alpha"]);
+  });
+
+  test("sorts roles alphabetically, unassigned last, then status and name", () => {
+    const sorted = sortLsRows([...rows, row("aardvark", "reviewer", "working")], "role");
+    expect(sorted.map((item) => item.name)).toEqual(["alpha", "aardvark", "beta", "zeta"]);
+  });
+
+  test("rejects an unknown sort", () => {
+    expect(() => sortLsRows(rows, "mystery")).toThrow(/status, recent, or role/);
+  });
+});
 
 describe("paneWaitingInfo", () => {
   test("detects indicators in the status region with display detail", () => {
