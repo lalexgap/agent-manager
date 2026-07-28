@@ -5,7 +5,7 @@ import { agentProvider, listAgents, readAgent, recordAttached, type Provider } f
 import { attachOrSwitch, hasSession, SCROLL_BINDINGS, shQuote, tmux } from "../tmux";
 import { cliEntrypoint } from "../settings";
 import { cachedRemoteRow, fleetPickerItems, shortHost, splitFleetKey, toggleGroupMode, toggleSortMode } from "../fleet";
-import { sshAm, sshRun } from "../remote";
+import { sshAm, sshAmAsync, sshRun } from "../remote";
 import { loadConfig } from "../config";
 import { cdHandler, cloneHandler, handoffHandler, moveHandler, renameHandler } from "./fleetActions";
 import { pick, type Feedback, type PaletteResult, type PaletteSpec, type PickerHandlers } from "../picker";
@@ -27,26 +27,30 @@ const HUB_SESSION = "am-hub";
 const SIDEBAR_WIDTH = 42;
 const HIGHLIGHT_DEBOUNCE_MS = 150;
 
-export function roleOptionsForHost(host: string | undefined, run: typeof sshAm = sshAm): { name: string; description?: string }[] {
+export function roleOptionsForHost(
+  host: string | undefined,
+  run: typeof sshAmAsync = sshAmAsync,
+): { name: string; description?: string }[] | Promise<{ name: string; description?: string }[]> {
   if (!host) return listRoles().filter((role) => role.name !== CONCIERGE_ROLE);
-  const result = run(host, ["role", "list", "--json"], { timeoutMs: 4000 });
-  if (result.exitCode !== 0) {
-    throw new Error(`could not load roles from ${host}: ${result.stderr.trim() || "remote command failed"}`);
-  }
-  try {
-    const roles = JSON.parse(result.stdout) as unknown;
-    if (!Array.isArray(roles)) throw new Error("role list is not an array");
-    return roles
-      .filter((role): role is { name: string; description?: string } =>
-        !!role && typeof role === "object" && typeof (role as { name?: unknown }).name === "string")
-      .filter((role) => role.name !== CONCIERGE_ROLE)
-      .map((role) => ({
-        name: role.name,
-        ...(typeof role.description === "string" && role.description ? { description: role.description } : {}),
-      }));
-  } catch {
-    throw new Error(`could not load roles from ${host}: invalid JSON response`);
-  }
+  return run(host, ["role", "list", "--json"], { timeoutMs: 4000 }).then((result) => {
+    if (result.exitCode !== 0) {
+      throw new Error(`could not load roles from ${host}: ${result.stderr.trim() || "remote command failed"}`);
+    }
+    try {
+      const roles = JSON.parse(result.stdout) as unknown;
+      if (!Array.isArray(roles)) throw new Error("role list is not an array");
+      return roles
+        .filter((role): role is { name: string; description?: string } =>
+          !!role && typeof role === "object" && typeof (role as { name?: unknown }).name === "string")
+        .filter((role) => role.name !== CONCIERGE_ROLE)
+        .map((role) => ({
+          name: role.name,
+          ...(typeof role.description === "string" && role.description ? { description: role.description } : {}),
+        }));
+    } catch {
+      throw new Error(`could not load roles from ${host}: invalid JSON response`);
+    }
+  });
 }
 
 function hubTarget(): string {

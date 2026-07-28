@@ -64,21 +64,27 @@ describe("role registry", () => {
     removeRole("constructor");
   });
 
-  test("loads create-form role options from the selected remote host", () => {
+  test("loads create-form role options asynchronously from the selected remote host", async () => {
     let calledWith: string[] = [];
-    const options = roleOptionsForHost("server", (_host, args) => {
+    let resolveRun!: (value: { exitCode: number; stdout: string; stderr: string }) => void;
+    const pending = new Promise<{ exitCode: number; stdout: string; stderr: string }>((resolve) => {
+      resolveRun = resolve;
+    });
+    const options = roleOptionsForHost("server", async (_host, args) => {
       calledWith = args;
-      return {
-        exitCode: 0,
-        stdout: JSON.stringify([
-          { name: "concierge", builtIn: true, instructions: "built in" },
-          { name: "remote-reviewer", description: "Remote only", instructions: "review" },
-        ]),
-        stderr: "",
-      };
+      return pending;
     });
     expect(calledWith).toEqual(["role", "list", "--json"]);
-    expect(options).toEqual([{ name: "remote-reviewer", description: "Remote only" }]);
+    expect(options).toBeInstanceOf(Promise);
+    resolveRun({
+      exitCode: 0,
+      stdout: JSON.stringify([
+        { name: "concierge", builtIn: true, instructions: "built in" },
+        { name: "remote-reviewer", description: "Remote only", instructions: "review" },
+      ]),
+      stderr: "",
+    });
+    expect(await options).toEqual([{ name: "remote-reviewer", description: "Remote only" }]);
   });
 
   test("legacy concierge state infers the built-in role", () => {

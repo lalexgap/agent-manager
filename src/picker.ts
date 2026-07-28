@@ -148,7 +148,8 @@ export interface PickerHandlers {
   defaultProvider?: string;
   // Used only for the create card's consequence preview.
   worktreeByDefault?: boolean;
-  roleOptions?: { name: string; description?: string }[] | ((host?: string) => { name: string; description?: string }[]);
+  roleOptions?: { name: string; description?: string }[] | ((host?: string) =>
+    { name: string; description?: string }[] | Promise<{ name: string; description?: string }[]>);
   // The create flow opens a full-screen form. The sidebar paints only its own
   // ~44-col pane, so the hub zooms that pane (tmux resize-pane -Z) while the
   // form is up and un-zooms when it closes. Called with true on open, false on
@@ -860,7 +861,9 @@ export async function pick(
   let newModel = "";
   let newEffortIdx = 0;
   const configuredRoles = (host?: string) => typeof handlers.roleOptions === "function" ? handlers.roleOptions(host) : (handlers.roleOptions ?? []);
-  let roleOptions = [{ name: "", description: "No custom role" }, ...configuredRoles()];
+  let roleOptions: { name: string; description?: string }[] = [
+    { name: "", description: "No custom role" },
+  ];
   let newRoleIdx = 0;
   // Full-screen create form: which field has the focus ring, and the dir
   // autocomplete candidates to display (when the last Tab was ambiguous).
@@ -872,6 +875,7 @@ export async function pick(
   // so a slow round-trip that lands after the input changed is discarded.
   let dirQuerying = false;
   let dirQueryGen = 0;
+  let roleQueryGen = 0;
   let cdDir = "";
   let cdTarget: string | null = null;
   let renameName = "";
@@ -1511,15 +1515,38 @@ export async function pick(
     const refreshRoleOptions = () => {
       const selected = roleOptions[newRoleIdx]?.name;
       const host = hostOptions[newHostIdx] === "local" ? undefined : hostOptions[newHostIdx];
-      try {
-        roleOptions = [{ name: "", description: "No custom role" }, ...configuredRoles(host)];
+      const gen = ++roleQueryGen;
+      const applyRoles = (roles: { name: string; description?: string }[]) => {
+        roleOptions = [{ name: "", description: "No custom role" }, ...roles];
         newRoleIdx = selected ? Math.max(0, roleOptions.findIndex((role) => role.name === selected)) : 0;
+        fields = formFields(hostOptions.length > 1, roleOptions.length > 1);
+      };
+      try {
+        const roles = configuredRoles(host);
+        if (Array.isArray(roles)) {
+          applyRoles(roles);
+          return;
+        }
+        applyRoles([]);
+        feedback = { text: `loading roles from ${host}…`, level: "info" };
+        roles.then(
+          (loaded) => {
+            if (finished || gen !== roleQueryGen) return;
+            applyRoles(loaded);
+            feedback = null;
+            render();
+          },
+          (error: Error) => {
+            if (finished || gen !== roleQueryGen) return;
+            applyRoles([]);
+            feedback = { text: error.message, level: "warn" };
+            render();
+          },
+        );
       } catch (error) {
-        roleOptions = [{ name: "", description: "No custom role" }];
-        newRoleIdx = 0;
+        applyRoles([]);
         feedback = { text: (error as Error).message, level: "warn" };
       }
-      fields = formFields(hostOptions.length > 1, roleOptions.length > 1);
     };
 
     const submitCreate = () => {
