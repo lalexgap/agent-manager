@@ -358,6 +358,7 @@ export function fleetPickerItems(): PickerItem[] {
       iconStyle: STATUS_COLORS.dead,
       status: "dead",
       statusLabel: "unreachable",
+      roleFilterable: false,
       label: `(${shortHost(host)} unreachable)`,
       right: "",
       rightStyle: MUTED,

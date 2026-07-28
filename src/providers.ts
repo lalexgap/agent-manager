@@ -193,8 +193,14 @@ export function buildLaunchCommand(provider: Provider, name: string, opts: Launc
     if (opts.effort) command.push("-c", `model_reasoning_effort=${opts.effort}`);
     command.push(...codexConversationArgs(opts));
     if (opts.message) command.push(`${agentSystemPrompt(name, opts)}\n\n# Your task\n\n${opts.message}`);
-    else if (opts.role) command.push(agentSystemPrompt(name, opts));
-    return { command };
+    else if (opts.role && opts.resume !== true) command.push(agentSystemPrompt(name, opts));
+    // `codex resume <positional>` treats the positional as a session id. Keep
+    // the bare interactive selector bare, then deliver the role briefing once
+    // SessionStart fires for the conversation the operator chose.
+    return {
+      command,
+      ...(opts.role && opts.resume === true ? { deferredMessage: agentSystemPrompt(name, opts) } : {}),
+    };
   }
   return claudeCommand(name, conversationArgs(opts), opts);
 }

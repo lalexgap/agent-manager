@@ -161,6 +161,17 @@ describe("buildLaunchCommand", () => {
     expect(plan.command.at(-1)).toContain("Review changes only.");
   });
 
+  test("codex keeps the bare resume selector positional-free and defers its role", () => {
+    const plan = buildLaunchCommand("codex", "worker", {
+      resume: true,
+      role: "reviewer",
+      roleInstructions: "Review changes only.",
+    });
+    expect(plan.command.at(-1)).toBe("resume");
+    expect(plan.deferredMessage).toContain("# Your role: reviewer");
+    expect(plan.deferredMessage).toContain("Review changes only.");
+  });
+
   test("claude threads --model and --effort when set", () => {
     const plan = buildLaunchCommand("claude", "worker", {
       message: "do the thing",

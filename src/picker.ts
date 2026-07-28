@@ -14,6 +14,9 @@ export interface PickerItem {
   status?: string;
   statusLabel?: string;
   role?: string;
+  // False for synthetic fleet rows such as an unreachable-host marker. These
+  // rows are visible fleet context, but are not unassigned agents.
+  roleFilterable?: boolean;
   // Row styling is split into the activity column and compact provider chip.
   labelStyle?: string;
   badge?: string;
@@ -42,6 +45,18 @@ export function visibleItems(items: PickerItem[], filter: string, showAll: boole
   return items
     .filter((i) => `${i.name} ${i.search ?? ""}`.toLowerCase().includes(filter.toLowerCase()))
     .filter((i) => showAll || filter !== "" || !i.secondary);
+}
+
+export function pickerRoleFilterOptions(items: PickerItem[]): string[] {
+  const agents = items.filter((item) => item.roleFilterable !== false);
+  const roles = [...new Set(agents.map((item) => item.role).filter((role): role is string => !!role))].sort();
+  return [...roles, ...(agents.some((item) => !item.role) ? ["unassigned"] : [])];
+}
+
+export function matchesPickerRole(item: PickerItem, role: string | null): boolean {
+  if (!role) return true;
+  if (item.roleFilterable === false) return false;
+  return role === "unassigned" ? !item.role : item.role === role;
 }
 
 // Action results render as a colored banner under the header. A bare string
@@ -894,8 +909,7 @@ export async function pick(
 
   let showAll = false;
   let roleFilter: string | null = null;
-  const matchesRole = (item: PickerItem) => !roleFilter
-    || (roleFilter === "unassigned" ? !item.role : item.role === roleFilter);
+  const matchesRole = (item: PickerItem) => matchesPickerRole(item, roleFilter);
   const filtered = () => {
     if (chatMatch) {
       // Chat-search owns the list: show every agent whose conversation matched
@@ -914,6 +928,7 @@ export async function pick(
   const paletteCommands = (): PaletteCommand[] => {
     const target = filtered()[cursor];
     const name = target?.label ?? target?.name;
+    const filterRoles = pickerRoleFilterOptions(items);
     const commands: (PaletteCommand | undefined)[] = [
       target && {
         id: "open",
@@ -934,10 +949,9 @@ export async function pick(
       handlers.regroup && { id: "regroup", label: "Toggle host/project grouping", keywords: "group directory", shortcut: "g" },
       handlers.resort && { id: "resort", label: "Cycle status/recent/role sort", keywords: "sort recent newest latest updated role", shortcut: "s" },
       roleFilter ? { id: "role:all", label: "Show all roles", keywords: "role filter clear", shortcut: "r" } : undefined,
-      ...[...new Set(items.map((item) => item.role).filter((role): role is string => !!role))]
-        .sort()
+      ...filterRoles.filter((role) => role !== "unassigned")
         .map((role) => ({ id: `role:${role}`, label: `Filter role: ${role}`, keywords: "role filter", shortcut: "r" })),
-      items.some((item) => !item.role)
+      filterRoles.includes("unassigned")
         ? { id: "role:unassigned", label: "Filter role: unassigned", keywords: "role filter none", shortcut: "r" }
         : undefined,
       target && handlers.move && { id: "move", label: `Move ${name}`, keywords: "remote host relocate", shortcut: "e m" },
@@ -2212,8 +2226,7 @@ export async function pick(
         showAll = !showAll;
         feedback = null;
       } else if (key === "r") {
-        const roles = [...new Set(items.map((item) => item.role).filter((role): role is string => !!role))].sort();
-        const options = [...roles, ...(items.some((item) => !item.role) ? ["unassigned"] : [])];
+        const options = pickerRoleFilterOptions(items);
         const current = roleFilter ? options.indexOf(roleFilter) : -1;
         roleFilter = current + 1 < options.length ? options[current + 1]! : null;
         cursor = 0;

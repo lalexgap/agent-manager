@@ -7,7 +7,9 @@ import {
   feedbackBanner,
   filterPaletteCommands,
   formFields,
+  matchesPickerRole,
   parseMouseEvent,
+  pickerRoleFilterOptions,
   renamedPickerKey,
   splitKeys,
   tmuxKeyBar,
@@ -22,6 +24,25 @@ const RED_C = "\x1b[38;2;247;118;142m";
 const RED = "\x1b[31m";
 const BG = "\x1b[48;5;236m";
 const RESET = "\x1b[0m";
+
+describe("role filtering", () => {
+  const items = [
+    { name: "review", label: "review", role: "reviewer" },
+    { name: "plain", label: "plain" },
+    { name: "offline:", label: "offline", roleFilterable: false },
+  ];
+
+  test("does not count unreachable placeholders as unassigned agents", () => {
+    expect(pickerRoleFilterOptions([items[0]!, items[2]!])).toEqual(["reviewer"]);
+    expect(pickerRoleFilterOptions(items)).toEqual(["reviewer", "unassigned"]);
+  });
+
+  test("hides placeholders whenever a role filter is active", () => {
+    expect(matchesPickerRole(items[2]!, null)).toBe(true);
+    expect(matchesPickerRole(items[2]!, "unassigned")).toBe(false);
+    expect(matchesPickerRole(items[0]!, "reviewer")).toBe(true);
+  });
+});
 
 describe("visibleWidth", () => {
   test("ignores SGR escape sequences", () => {
