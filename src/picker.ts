@@ -122,7 +122,7 @@ export interface PickerHandlers {
   defaultProvider?: string;
   // Used only for the create card's consequence preview.
   worktreeByDefault?: boolean;
-  roleOptions?: { name: string; description?: string }[] | (() => { name: string; description?: string }[]);
+  roleOptions?: { name: string; description?: string }[] | ((host?: string) => { name: string; description?: string }[]);
   // The create flow opens a full-screen form. The sidebar paints only its own
   // ~44-col pane, so the hub zooms that pane (tmux resize-pane -Z) while the
   // form is up and un-zooms when it closes. Called with true on open, false on
@@ -833,8 +833,8 @@ export async function pick(
   let newProviderIdx = defaultProviderIdx;
   let newModel = "";
   let newEffortIdx = 0;
-  const configuredRoles = () => typeof handlers.roleOptions === "function" ? handlers.roleOptions() : (handlers.roleOptions ?? []);
-  let roleOptions = [{ name: "none", description: "No custom role" }, ...configuredRoles()];
+  const configuredRoles = (host?: string) => typeof handlers.roleOptions === "function" ? handlers.roleOptions(host) : (handlers.roleOptions ?? []);
+  let roleOptions = [{ name: "", description: "No custom role" }, ...configuredRoles()];
   let newRoleIdx = 0;
   // Full-screen create form: which field has the focus ring, and the dir
   // autocomplete candidates to display (when the last Tab was ambiguous).
@@ -1054,7 +1054,7 @@ export async function pick(
         value = optionStrip(PROVIDER_OPTIONS, newProviderIdx, rowBase, field);
       } else if (field === "role") {
         const selectedRole = roleOptions[newRoleIdx]!;
-        value = `${THEME.muted}‹${rowBase} ${THEME.cyan}${selectedRole.name}${rowBase} ${THEME.muted}›${rowBase}`;
+        value = `${THEME.muted}‹${rowBase} ${THEME.cyan}${selectedRole.name || "none"}${rowBase} ${THEME.muted}›${rowBase}`;
         hint = selectedRole.description ? `${THEME.faint}${selectedRole.description}${rowBase}` : "";
       } else if (field === "effort") {
         value = optionStrip(EFFORT_OPTIONS, newEffortIdx, rowBase, field);
@@ -1107,7 +1107,7 @@ export async function pick(
     const where = hostOptions[newHostIdx] === "local" ? "locally" : `on ${hostOptions[newHostIdx]}`;
     const worktree = handlers.worktreeByDefault ? " in a worktree of" : " in";
     const selectedRole = roleOptions[newRoleIdx]?.name;
-    const roleSummary = selectedRole && selectedRole !== "none" ? ` as ${THEME.cyan}${selectedRole}${THEME.muted}` : "";
+    const roleSummary = selectedRole ? ` as ${THEME.cyan}${selectedRole}${THEME.muted}` : "";
     const summary = `${THEME.muted}  will run ${providerColor}${provider}${THEME.muted}${roleSummary} ${where}${worktree} ${THEME.blue}${newDir || "the current directory"}${THEME.form}`;
     const create = `${bg("9ece6a")}${fg("16161e")}${BOLD} ⏎ create ${NORMAL_WEIGHT}${THEME.form}`;
     card.push({ text: content(alignAnsi(summary, create, cardWidth)) });
@@ -1465,8 +1465,6 @@ export async function pick(
 
     const beginCreate = () => {
       if (!handlers.create) return;
-      roleOptions = [{ name: "none", description: "No custom role" }, ...configuredRoles()];
-      fields = formFields(hostOptions.length > 1, roleOptions.length > 1);
       mode = "new-form";
       newName = "";
       newTask = "";
@@ -1481,7 +1479,22 @@ export async function pick(
       dirQuerying = false;
       dirQueryGen++;
       feedback = null;
+      refreshRoleOptions();
       setForm(true); // zoom the sidebar pane to full screen
+    };
+
+    const refreshRoleOptions = () => {
+      const selected = roleOptions[newRoleIdx]?.name;
+      const host = hostOptions[newHostIdx] === "local" ? undefined : hostOptions[newHostIdx];
+      try {
+        roleOptions = [{ name: "", description: "No custom role" }, ...configuredRoles(host)];
+        newRoleIdx = selected ? Math.max(0, roleOptions.findIndex((role) => role.name === selected)) : 0;
+      } catch (error) {
+        roleOptions = [{ name: "", description: "No custom role" }];
+        newRoleIdx = 0;
+        feedback = { text: (error as Error).message, level: "warn" };
+      }
+      fields = formFields(hostOptions.length > 1, roleOptions.length > 1);
     };
 
     const submitCreate = () => {
@@ -1491,7 +1504,7 @@ export async function pick(
       const host = hostOptions[newHostIdx] === "local" ? undefined : hostOptions[newHostIdx];
       const provider = PROVIDER_OPTIONS[newProviderIdx];
       const effort = EFFORT_OPTIONS[newEffortIdx] === "default" ? undefined : EFFORT_OPTIONS[newEffortIdx];
-      const role = roleOptions[newRoleIdx]?.name === "none" ? undefined : roleOptions[newRoleIdx]?.name;
+      const role = roleOptions[newRoleIdx]?.name || undefined;
       handlers.create(newName, newTask || undefined, newDir.trim() || undefined, host, provider, newModel.trim() || undefined, effort, role).then(
         (created) => {
           if (!handlers.select) return finish(created);
@@ -2048,7 +2061,10 @@ export async function pick(
           if (field === "provider") newProviderIdx = cycleField(newProviderIdx, PROVIDER_OPTIONS.length, dir);
           else if (field === "effort") newEffortIdx = cycleField(newEffortIdx, EFFORT_OPTIONS.length, dir);
           else if (field === "role") newRoleIdx = cycleField(newRoleIdx, roleOptions.length, dir);
-          else if (field === "where") newHostIdx = cycleField(newHostIdx, hostOptions.length, dir);
+          else if (field === "where") {
+            newHostIdx = cycleField(newHostIdx, hostOptions.length, dir);
+            refreshRoleOptions();
+          }
         } else if (key === "\x7f" || key === "\b") {
           if (field === "name") {
             newName = newName.slice(0, -1);

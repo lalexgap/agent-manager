@@ -27,6 +27,28 @@ const HUB_SESSION = "am-hub";
 const SIDEBAR_WIDTH = 42;
 const HIGHLIGHT_DEBOUNCE_MS = 150;
 
+export function roleOptionsForHost(host: string | undefined, run: typeof sshAm = sshAm): { name: string; description?: string }[] {
+  if (!host) return listRoles().filter((role) => role.name !== CONCIERGE_ROLE);
+  const result = run(host, ["role", "list", "--json"], { timeoutMs: 4000 });
+  if (result.exitCode !== 0) {
+    throw new Error(`could not load roles from ${host}: ${result.stderr.trim() || "remote command failed"}`);
+  }
+  try {
+    const roles = JSON.parse(result.stdout) as unknown;
+    if (!Array.isArray(roles)) throw new Error("role list is not an array");
+    return roles
+      .filter((role): role is { name: string; description?: string } =>
+        !!role && typeof role === "object" && typeof (role as { name?: unknown }).name === "string")
+      .filter((role) => role.name !== CONCIERGE_ROLE)
+      .map((role) => ({
+        name: role.name,
+        ...(typeof role.description === "string" && role.description ? { description: role.description } : {}),
+      }));
+  } catch {
+    throw new Error(`could not load roles from ${host}: invalid JSON response`);
+  }
+}
+
 function hubTarget(): string {
   return `=${HUB_SESSION}:`;
 }
@@ -424,7 +446,7 @@ export async function sidebarCommand(): Promise<void> {
     },
     defaultProvider: config.defaultProvider,
     worktreeByDefault: config.worktreeByDefault,
-    roleOptions: () => listRoles().filter((role) => role.name !== CONCIERGE_ROLE),
+    roleOptions: (host) => roleOptionsForHost(host),
 
     quit: () => {
       tmux("detach-client", "-s", `=${HUB_SESSION}`);

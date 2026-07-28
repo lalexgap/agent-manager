@@ -52,6 +52,12 @@ const BUILT_INS: Record<string, AgentRole> = {
   },
 };
 
+const RESERVED_ROLE_NAMES = new Set(["none", "unassigned"]);
+
+function builtInRole(name: string): AgentRole | undefined {
+  return Object.prototype.hasOwnProperty.call(BUILT_INS, name) ? BUILT_INS[name] : undefined;
+}
+
 interface StoredRole {
   description?: string;
   instructions: string;
@@ -60,6 +66,9 @@ interface StoredRole {
 export function validateRoleName(name: string): void {
   if (!isValidRoleName(name)) {
     throw new Error("role name must be 1–32 lowercase letters, numbers, dashes, or underscores, starting with a letter");
+  }
+  if (RESERVED_ROLE_NAMES.has(name)) {
+    throw new Error(`role name "${name}" is reserved by the role picker`);
   }
 }
 
@@ -82,8 +91,8 @@ function readCustomRole(name: string): AgentRole | null {
 }
 
 export function getRole(name: string): AgentRole | null {
-  if (!isValidRoleName(name)) return null;
-  return BUILT_INS[name] ?? readCustomRole(name);
+  if (!isValidRoleName(name) || RESERVED_ROLE_NAMES.has(name)) return null;
+  return builtInRole(name) ?? readCustomRole(name);
 }
 
 export function requireRole(name: string): AgentRole {
@@ -99,7 +108,8 @@ export function listRoles(): AgentRole[] {
       .filter((file) => file.endsWith(".json"))
       .map((file) => file.slice(0, -5))
       .filter(isValidRoleName)
-      .filter((name) => !(name in BUILT_INS))
+      .filter((name) => !RESERVED_ROLE_NAMES.has(name))
+      .filter((name) => !builtInRole(name))
       .map(readCustomRole)
       .filter((role): role is AgentRole => role !== null)
       .sort((a, b) => a.name.localeCompare(b.name))
@@ -110,7 +120,7 @@ export function listRoles(): AgentRole[] {
 export function addRole(input: { name: string; description?: string; instructions: string; force?: boolean }): AgentRole {
   const name = input.name.trim();
   validateRoleName(name);
-  if (BUILT_INS[name]) throw new Error(`role "${name}" is built in and cannot be replaced`);
+  if (builtInRole(name)) throw new Error(`role "${name}" is built in and cannot be replaced`);
   if (existsSync(roleFile(name)) && !input.force) {
     throw new Error(`role "${name}" already exists — pass --force to replace it`);
   }
@@ -124,7 +134,7 @@ export function addRole(input: { name: string; description?: string; instruction
 
 export function removeRole(name: string): void {
   validateRoleName(name);
-  if (BUILT_INS[name]) throw new Error(`role "${name}" is built in and cannot be removed`);
+  if (builtInRole(name)) throw new Error(`role "${name}" is built in and cannot be removed`);
   if (!existsSync(roleFile(name))) throw new Error(`unknown role "${name}"`);
   rmSync(roleFile(name), { force: true });
 }

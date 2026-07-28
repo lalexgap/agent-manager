@@ -11,6 +11,7 @@ import {
   requireRole,
   roleForAgent,
 } from "../src/roles";
+import { roleOptionsForHost } from "../src/commands/ui";
 
 let home: string;
 
@@ -52,7 +53,32 @@ describe("role registry", () => {
     expect(() => addRole({ name: "../escape", instructions: "no" })).toThrow(/role name/);
     expect(() => addRole({ name: "Reviewer", instructions: "no" })).toThrow(/role name/);
     expect(() => addRole({ name: "reviewer", instructions: "  " })).toThrow(/empty/);
+    expect(() => addRole({ name: "none", instructions: "no" })).toThrow(/reserved/);
+    expect(() => addRole({ name: "unassigned", instructions: "no" })).toThrow(/reserved/);
     expect(getRole("../config")).toBeNull();
+  });
+
+  test("valid names inherited from Object.prototype remain custom roles", () => {
+    addRole({ name: "constructor", instructions: "Construct a review." });
+    expect(requireRole("constructor")).toMatchObject({ name: "constructor", instructions: "Construct a review." });
+    removeRole("constructor");
+  });
+
+  test("loads create-form role options from the selected remote host", () => {
+    let calledWith: string[] = [];
+    const options = roleOptionsForHost("server", (_host, args) => {
+      calledWith = args;
+      return {
+        exitCode: 0,
+        stdout: JSON.stringify([
+          { name: "concierge", builtIn: true, instructions: "built in" },
+          { name: "remote-reviewer", description: "Remote only", instructions: "review" },
+        ]),
+        stderr: "",
+      };
+    });
+    expect(calledWith).toEqual(["role", "list", "--json"]);
+    expect(options).toEqual([{ name: "remote-reviewer", description: "Remote only" }]);
   });
 
   test("legacy concierge state infers the built-in role", () => {
