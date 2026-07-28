@@ -10,6 +10,7 @@ import {
   matchesPickerRole,
   parseMouseEvent,
   pickerRoleFilterOptions,
+  preservedFieldIndex,
   renamedPickerKey,
   splitKeys,
   tmuxKeyBar,
@@ -164,6 +165,14 @@ describe("formFields", () => {
   test("adds a role selector only when custom roles exist", () => {
     expect(formFields(false, true)).toEqual(["name", "task", "dir", "role", "provider", "model", "effort"]);
     expect(formFields(true, true)).toEqual(["name", "task", "where", "dir", "role", "provider", "model", "effort"]);
+  });
+
+  test("preserves focus by field identity when async roles insert a field", () => {
+    const before = formFields(true, false);
+    const after = formFields(true, true);
+    expect(before[5]).toBe("model");
+    expect(preservedFieldIndex(before, 5, after)).toBe(6);
+    expect(after[preservedFieldIndex(before, 5, after)]).toBe("model");
   });
 });
 

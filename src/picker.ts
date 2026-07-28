@@ -806,6 +806,13 @@ export function formFields(hasRemotes: boolean, hasRoles = false): string[] {
   return fields;
 }
 
+export function preservedFieldIndex(previous: string[], index: number, next: string[]): number {
+  const focused = previous[index];
+  const matching = focused === undefined ? -1 : next.indexOf(focused);
+  if (matching >= 0) return matching;
+  return Math.min(Math.max(0, index), Math.max(0, next.length - 1));
+}
+
 // Provider cycle (mirrors the Where field). The first entry is the default.
 export const PROVIDER_OPTIONS = ["claude", "codex"];
 // Effort cycle; "default" means omit the flag and let the provider decide.
@@ -1517,9 +1524,12 @@ export async function pick(
       const host = hostOptions[newHostIdx] === "local" ? undefined : hostOptions[newHostIdx];
       const gen = ++roleQueryGen;
       const applyRoles = (roles: { name: string; description?: string }[]) => {
+        const previousFields = fields;
+        const previousFormIdx = formIdx;
         roleOptions = [{ name: "", description: "No custom role" }, ...roles];
         newRoleIdx = selected ? Math.max(0, roleOptions.findIndex((role) => role.name === selected)) : 0;
         fields = formFields(hostOptions.length > 1, roleOptions.length > 1);
+        formIdx = preservedFieldIndex(previousFields, previousFormIdx, fields);
       };
       try {
         const roles = configuredRoles(host);
