@@ -13,6 +13,7 @@ export interface SummaryItem {
   reason?: string;
   task?: string;
   provider?: FleetRow["provider"];
+  role?: string;
   queued: number;
   changedAt?: string;
   ageSeconds: number;
@@ -57,6 +58,7 @@ function summaryItem(row: FleetRow, nowMs: number): SummaryItem {
     ...(reason ? { reason } : {}),
     ...(shortTask(row.task) ? { task: shortTask(row.task) } : {}),
     provider: row.provider,
+    ...(row.role ? { role: row.role } : {}),
     queued: row.queued,
     changedAt,
     ageSeconds: age,
@@ -141,7 +143,8 @@ function section(title: string, items: SummaryItem[], nameWidth: number): string
     const detail = item.reason ?? item.task;
     const queued = item.queued > 0 ? ` · ${item.queued} queued` : "";
     const age = item.status === "unreachable" ? "" : `  ${formatAge(item.ageSeconds)}`;
-    lines.push(`  ${item.key.padEnd(nameWidth)} ${item.status}${detail ? ` — ${detail}` : ""}${queued}${age}`);
+    const role = item.role ? ` · ${item.role}` : "";
+    lines.push(`  ${item.key.padEnd(nameWidth)} ${item.status}${role}${detail ? ` — ${detail}` : ""}${queued}${age}`);
   }
   return lines;
 }

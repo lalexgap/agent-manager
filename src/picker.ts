@@ -13,6 +13,10 @@ export interface PickerItem {
   // card. It stays a string so the picker remains independent of AgentState.
   status?: string;
   statusLabel?: string;
+  role?: string;
+  // False for synthetic fleet rows such as an unreachable-host marker. These
+  // rows are visible fleet context, but are not unassigned agents.
+  roleFilterable?: boolean;
   // Row styling is split into the activity column and compact provider chip.
   labelStyle?: string;
   badge?: string;
@@ -41,6 +45,29 @@ export function visibleItems(items: PickerItem[], filter: string, showAll: boole
   return items
     .filter((i) => `${i.name} ${i.search ?? ""}`.toLowerCase().includes(filter.toLowerCase()))
     .filter((i) => showAll || filter !== "" || !i.secondary);
+}
+
+export function pickerRoleFilterOptions(items: PickerItem[]): string[] {
+  const agents = items.filter((item) => item.roleFilterable !== false);
+  const roles = [...new Set(agents.map((item) => item.role).filter((role): role is string => !!role))].sort();
+  return [...roles, ...(agents.some((item) => !item.role) ? ["unassigned"] : [])];
+}
+
+export function matchesPickerRole(item: PickerItem, role: string | null): boolean {
+  if (!role) return true;
+  if (item.roleFilterable === false) return false;
+  return role === "unassigned" ? !item.role : item.role === role;
+}
+
+export function visibleItemsForRole(
+  items: PickerItem[],
+  filter: string,
+  showAll: boolean,
+  role: string | null,
+): PickerItem[] {
+  // Choosing a role is an explicit search, just like typing a text filter, so
+  // matching exited agents should not disappear behind the default view.
+  return visibleItems(items, filter, showAll || !!role).filter((item) => matchesPickerRole(item, role));
 }
 
 // Action results render as a colored banner under the header. A bare string
@@ -75,6 +102,7 @@ export interface PickerHandlers {
     provider: string | undefined,
     model: string | undefined,
     effort: string | undefined,
+    role: string | undefined,
   ) => Promise<string>;
   // Configured remote hosts. When non-empty, the create flow adds a
   // "where" step (local vs a remote) after the dir prompt.
@@ -120,6 +148,8 @@ export interface PickerHandlers {
   defaultProvider?: string;
   // Used only for the create card's consequence preview.
   worktreeByDefault?: boolean;
+  roleOptions?: { name: string; description?: string }[] | ((host?: string) =>
+    { name: string; description?: string }[] | Promise<{ name: string; description?: string }[]>);
   // The create flow opens a full-screen form. The sidebar paints only its own
   // ~44-col pane, so the hub zooms that pane (tmux resize-pane -Z) while the
   // form is up and un-zooms when it closes. Called with true on open, false on
@@ -447,6 +477,7 @@ export interface PaletteAgentEntry {
   iconStyle?: string;
   badge?: string;
   badgeStyle?: string;
+  role?: string;
 }
 
 export interface PaletteSpec {
@@ -537,7 +568,7 @@ export function paletteScreenRows(opts: {
     const rowBase = selectedRow ? THEME.selected : THEME.form;
     const marker = selectedRow ? `${THEME.blue}▌${rowBase} ` : "  ";
     const icon = `${item.iconStyle ?? THEME.muted}${item.icon ?? "●"}${rowBase}`;
-    const action = `${THEME.muted} — ${attachLabel}${rowBase}`;
+    const action = `${THEME.muted} — ${item.role ? `${item.role} · ` : ""}${attachLabel}${rowBase}`;
     const tag = item.badge ? `${item.badgeStyle ?? THEME.muted}${item.badge}${rowBase} ` : " ";
     body.push({
       text: content(alignAnsi(marker + icon + " " + highlightTerms(item.label, rowBase) + action, tag, width), rowBase),
@@ -693,6 +724,7 @@ function keyBarHints(mode: Mode, handlers: PickerHandlers, active: boolean): { l
       ...(handlers.create ? [{ key: "n", label: "new" }] : []),
       ...(handlers.concierge ? [{ key: "c", label: "concierge" }] : []),
       { key: "f", label: "filter" },
+      { key: "r", label: "role" },
       ...(handlers.regroup ? [{ key: "g", label: "group" }] : []),
       ...(handlers.resort ? [{ key: "s", label: "sort" }] : []),
       ...(hasEditActions(handlers) ? [{ key: "e", label: "edit" }] : []),
@@ -764,12 +796,21 @@ export function renamedPickerKey(key: string, newName: string): string {
 // The create form's fields. "where" (local vs a configured remote) only
 // appears when remotes exist, mirroring the old stepped flow. Provider/model/
 // effort are always shown — they apply equally to local and remote spawns.
-export function formFields(hasRemotes: boolean): string[] {
+export function formFields(hasRemotes: boolean, hasRoles = false): string[] {
   // "where" (location) sits just before "dir" so you pick the host first — the
   // dir field then completes against that host on the first Tab.
-  return hasRemotes
+  const fields = hasRemotes
     ? ["name", "task", "where", "dir", "provider", "model", "effort"]
     : ["name", "task", "dir", "provider", "model", "effort"];
+  if (hasRoles) fields.splice(fields.indexOf("provider"), 0, "role");
+  return fields;
+}
+
+export function preservedFieldIndex(previous: string[], index: number, next: string[]): number {
+  const focused = previous[index];
+  const matching = focused === undefined ? -1 : next.indexOf(focused);
+  if (matching >= 0) return matching;
+  return Math.min(Math.max(0, index), Math.max(0, next.length - 1));
 }
 
 // Provider cycle (mirrors the Where field). The first entry is the default.
@@ -826,9 +867,14 @@ export async function pick(
   let newProviderIdx = defaultProviderIdx;
   let newModel = "";
   let newEffortIdx = 0;
+  const configuredRoles = (host?: string) => typeof handlers.roleOptions === "function" ? handlers.roleOptions(host) : (handlers.roleOptions ?? []);
+  let roleOptions: { name: string; description?: string }[] = [
+    { name: "", description: "No custom role" },
+  ];
+  let newRoleIdx = 0;
   // Full-screen create form: which field has the focus ring, and the dir
   // autocomplete candidates to display (when the last Tab was ambiguous).
-  const fields = formFields(hostOptions.length > 1);
+  let fields = formFields(hostOptions.length > 1, roleOptions.length > 1);
   let formIdx = 0;
   let formCandidates: string[] = [];
   // Remote Dir completion runs over ssh: dirQuerying drives the "(querying …)"
@@ -836,6 +882,7 @@ export async function pick(
   // so a slow round-trip that lands after the input changed is discarded.
   let dirQuerying = false;
   let dirQueryGen = 0;
+  let roleQueryGen = 0;
   let cdDir = "";
   let cdTarget: string | null = null;
   let renameName = "";
@@ -883,6 +930,8 @@ export async function pick(
   };
 
   let showAll = false;
+  let roleFilter: string | null = null;
+  const matchesRole = (item: PickerItem) => matchesPickerRole(item, roleFilter);
   const filtered = () => {
     if (chatMatch) {
       // Chat-search owns the list: show every agent whose conversation matched
@@ -892,14 +941,16 @@ export async function pick(
       return chatOrder
         .map((name) => byName.get(name))
         .filter((i): i is PickerItem => !!i)
+        .filter(matchesRole)
         .map((i) => ({ ...i, meta: [`match    ${chatMatch!.get(i.name) ?? ""}`, ...(i.meta ?? [])] }));
     }
-    return visibleItems(items, filter, showAll);
+    return visibleItemsForRole(items, filter, showAll, roleFilter);
   };
 
   const paletteCommands = (): PaletteCommand[] => {
     const target = filtered()[cursor];
     const name = target?.label ?? target?.name;
+    const filterRoles = pickerRoleFilterOptions(items);
     const commands: (PaletteCommand | undefined)[] = [
       target && {
         id: "open",
@@ -918,7 +969,13 @@ export async function pick(
         shortcut: "a",
       },
       handlers.regroup && { id: "regroup", label: "Toggle host/project grouping", keywords: "group directory", shortcut: "g" },
-      handlers.resort && { id: "resort", label: "Toggle within-group activity sort", keywords: "sort recent newest latest updated", shortcut: "s" },
+      handlers.resort && { id: "resort", label: "Cycle status/recent/role sort", keywords: "sort recent newest latest updated role", shortcut: "s" },
+      roleFilter ? { id: "role:all", label: "Show all roles", keywords: "role filter clear", shortcut: "r" } : undefined,
+      ...filterRoles.filter((role) => role !== "unassigned")
+        .map((role) => ({ id: `role:${role}`, label: `Filter role: ${role}`, keywords: "role filter", shortcut: "r" })),
+      filterRoles.includes("unassigned")
+        ? { id: "role:unassigned", label: "Filter role: unassigned", keywords: "role filter none", shortcut: "r" }
+        : undefined,
       target && handlers.move && { id: "move", label: `Move ${name}`, keywords: "remote host relocate", shortcut: "e m" },
       target && handlers.clone && { id: "clone", label: `Clone ${name}`, keywords: "copy fork remote", shortcut: "e c" },
       target && handlers.handoff && { id: "handoff", label: `Handoff ${name}`, keywords: "provider transcript", shortcut: "e h" },
@@ -982,6 +1039,7 @@ export async function pick(
       model: "model",
       effort: "effort",
       where: "where",
+      role: "role",
     };
     const cardWidth = Math.max(1, Math.min(76, cols - 4));
     // Rows: 1-cell marker column, 11-cell label, value, 2-cell right pad.
@@ -1030,6 +1088,10 @@ export async function pick(
         value = newModel ? newModel + cursor : `${THEME.muted}default${rowBase}${cursor}`;
       } else if (field === "provider") {
         value = optionStrip(PROVIDER_OPTIONS, newProviderIdx, rowBase, field);
+      } else if (field === "role") {
+        const selectedRole = roleOptions[newRoleIdx]!;
+        value = `${THEME.muted}‹${rowBase} ${THEME.cyan}${selectedRole.name || "none"}${rowBase} ${THEME.muted}›${rowBase}`;
+        hint = selectedRole.description ? `${THEME.faint}${selectedRole.description}${rowBase}` : "";
       } else if (field === "effort") {
         value = optionStrip(EFFORT_OPTIONS, newEffortIdx, rowBase, field);
       } else {
@@ -1080,7 +1142,9 @@ export async function pick(
     const providerColor = provider === "claude" ? THEME.purple : THEME.blue;
     const where = hostOptions[newHostIdx] === "local" ? "locally" : `on ${hostOptions[newHostIdx]}`;
     const worktree = handlers.worktreeByDefault ? " in a worktree of" : " in";
-    const summary = `${THEME.muted}  will run ${providerColor}${provider}${THEME.muted} ${where}${worktree} ${THEME.blue}${newDir || "the current directory"}${THEME.form}`;
+    const selectedRole = roleOptions[newRoleIdx]?.name;
+    const roleSummary = selectedRole ? ` as ${THEME.cyan}${selectedRole}${THEME.muted}` : "";
+    const summary = `${THEME.muted}  will run ${providerColor}${provider}${THEME.muted}${roleSummary} ${where}${worktree} ${THEME.blue}${newDir || "the current directory"}${THEME.form}`;
     const create = `${bg("9ece6a")}${fg("16161e")}${BOLD} ⏎ create ${NORMAL_WEIGHT}${THEME.form}`;
     card.push({ text: content(alignAnsi(summary, create, cardWidth)) });
     card.push({ text: content("") });
@@ -1191,7 +1255,9 @@ export async function pick(
     const headerBlock: Cell[] = [
       { text: alignAnsi(titleLeft, titleRight, sidebarWidth), style: THEME.sidebar },
       {
-        text: exited > 0
+        text: roleFilter
+          ? `${THEME.cyan}role: ${roleFilter}${THEME.faint} · r next · f filter${THEME.sidebar}`
+          : exited > 0
           ? `${THEME.faint}${exited} exited · ${THEME.muted}a${THEME.faint} ${showAll ? "hide" : "all"} · ${THEME.muted}f${THEME.faint} filter${THEME.sidebar}`
           : `${THEME.faint}${current.length === 0 ? "no active agents" : "f filter · / search chats"}${THEME.sidebar}`,
         style: THEME.sidebar,
@@ -1281,10 +1347,11 @@ export async function pick(
         ...(handlers.create ? [`${key("n")} create agent`] : []),
         ...(handlers.concierge ? [`${key("c")} ask the concierge`] : []),
         `${key("f")} filter names/tasks`,
+        `${key("r")} filter by role`,
         `${key("/")} search conversations`,
         `${key("ctrl-k")} command palette`,
         ...(handlers.regroup ? [`${key("g")} group host/project`] : []),
-        ...(handlers.resort ? [`${key("s")} sort by activity within groups`] : []),
+        ...(handlers.resort ? [`${key("s")} cycle status/recent/role sort`] : []),
         `${key("a")} show exited agents`,
         ...(hasEditActions(handlers) ? [`${key("e")} edit selected agent`] : []),
         `${key("q / esc")} ${handlers.quit ? "detach" : "quit"}`,
@@ -1442,12 +1509,54 @@ export async function pick(
       newProviderIdx = defaultProviderIdx;
       newModel = "";
       newEffortIdx = 0;
+      newRoleIdx = 0;
       formIdx = 0;
       formCandidates = [];
       dirQuerying = false;
       dirQueryGen++;
       feedback = null;
+      refreshRoleOptions();
       setForm(true); // zoom the sidebar pane to full screen
+    };
+
+    const refreshRoleOptions = () => {
+      const selected = roleOptions[newRoleIdx]?.name;
+      const host = hostOptions[newHostIdx] === "local" ? undefined : hostOptions[newHostIdx];
+      const gen = ++roleQueryGen;
+      const applyRoles = (roles: { name: string; description?: string }[]) => {
+        const previousFields = fields;
+        const previousFormIdx = formIdx;
+        roleOptions = [{ name: "", description: "No custom role" }, ...roles];
+        newRoleIdx = selected ? Math.max(0, roleOptions.findIndex((role) => role.name === selected)) : 0;
+        fields = formFields(hostOptions.length > 1, roleOptions.length > 1);
+        formIdx = preservedFieldIndex(previousFields, previousFormIdx, fields);
+      };
+      try {
+        const roles = configuredRoles(host);
+        if (Array.isArray(roles)) {
+          applyRoles(roles);
+          return;
+        }
+        applyRoles([]);
+        feedback = { text: `loading roles from ${host}…`, level: "info" };
+        roles.then(
+          (loaded) => {
+            if (finished || gen !== roleQueryGen) return;
+            applyRoles(loaded);
+            feedback = null;
+            render();
+          },
+          (error: Error) => {
+            if (finished || gen !== roleQueryGen) return;
+            applyRoles([]);
+            feedback = { text: error.message, level: "warn" };
+            render();
+          },
+        );
+      } catch (error) {
+        applyRoles([]);
+        feedback = { text: (error as Error).message, level: "warn" };
+      }
     };
 
     const submitCreate = () => {
@@ -1457,7 +1566,8 @@ export async function pick(
       const host = hostOptions[newHostIdx] === "local" ? undefined : hostOptions[newHostIdx];
       const provider = PROVIDER_OPTIONS[newProviderIdx];
       const effort = EFFORT_OPTIONS[newEffortIdx] === "default" ? undefined : EFFORT_OPTIONS[newEffortIdx];
-      handlers.create(newName, newTask || undefined, newDir.trim() || undefined, host, provider, newModel.trim() || undefined, effort).then(
+      const role = roleOptions[newRoleIdx]?.name || undefined;
+      handlers.create(newName, newTask || undefined, newDir.trim() || undefined, host, provider, newModel.trim() || undefined, effort, role).then(
         (created) => {
           if (!handlers.select) return finish(created);
           creating = false;
@@ -1469,6 +1579,7 @@ export async function pick(
           newProviderIdx = defaultProviderIdx;
           newModel = "";
           newEffortIdx = 0;
+          newRoleIdx = 0;
           formIdx = 0;
           formCandidates = [];
           dirQuerying = false;
@@ -1585,6 +1696,7 @@ export async function pick(
             // Clear filters so the concierge row is visible once it loads.
             mode = "list";
             filter = "";
+            roleFilter = null;
             chatQuery = "";
             chatMatch = null;
             chatOrder = [];
@@ -1610,6 +1722,14 @@ export async function pick(
     // arrives from the `am __palette` process) and the in-picker fallback.
     const runPaletteCommand = (id: string) => {
       const target = filtered()[cursor];
+      if (id.startsWith("role:")) {
+        roleFilter = id.slice(5) === "all" ? null : id.slice(5);
+        mode = "list";
+        cursor = 0;
+        cursorName = filtered()[0]?.name ?? null;
+        feedback = { text: roleFilter ? `showing role: ${roleFilter}` : "showing all roles", level: "info" };
+        return;
+      }
       switch (id) {
         case "open":
           mode = "list";
@@ -1726,6 +1846,7 @@ export async function pick(
           iconStyle: i.iconStyle,
           badge: i.badge,
           badgeStyle: i.badgeStyle,
+          role: i.role,
         })),
         attachLabel: handlers.select ? "lock in" : "attach",
       };
@@ -1933,6 +2054,7 @@ export async function pick(
           newProviderIdx = defaultProviderIdx;
           newModel = "";
           newEffortIdx = 0;
+          newRoleIdx = 0;
           formIdx = 0;
           formCandidates = [];
           dirQuerying = false;
@@ -2000,7 +2122,11 @@ export async function pick(
           const dir = key === "\x1b[C" ? 1 : -1;
           if (field === "provider") newProviderIdx = cycleField(newProviderIdx, PROVIDER_OPTIONS.length, dir);
           else if (field === "effort") newEffortIdx = cycleField(newEffortIdx, EFFORT_OPTIONS.length, dir);
-          else if (field === "where") newHostIdx = cycleField(newHostIdx, hostOptions.length, dir);
+          else if (field === "role") newRoleIdx = cycleField(newRoleIdx, roleOptions.length, dir);
+          else if (field === "where") {
+            newHostIdx = cycleField(newHostIdx, hostOptions.length, dir);
+            refreshRoleOptions();
+          }
         } else if (key === "\x7f" || key === "\b") {
           if (field === "name") {
             newName = newName.slice(0, -1);
@@ -2147,6 +2273,13 @@ export async function pick(
       } else if (key === "a") {
         showAll = !showAll;
         feedback = null;
+      } else if (key === "r") {
+        const options = pickerRoleFilterOptions(items);
+        const current = roleFilter ? options.indexOf(roleFilter) : -1;
+        roleFilter = current + 1 < options.length ? options[current + 1]! : null;
+        cursor = 0;
+        cursorName = filtered()[0]?.name ?? null;
+        feedback = { text: roleFilter ? `showing role: ${roleFilter}` : "showing all roles", level: "info" };
       } else if (key === "g" && handlers.regroup) {
         feedback = asFeedback(handlers.regroup());
         items = load();

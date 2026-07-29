@@ -233,6 +233,16 @@ describe("sortFleetRows", () => {
       "newest-remote",
     ]);
   });
+
+  test("sorts by role within each group and leaves unassigned last", () => {
+    const base = { provider: "claude", queued: 0, updatedAt: "", dir: "/tmp/app", status: "idle" } as const;
+    const rows = [
+      { ...base, name: "none" },
+      { ...base, name: "review", role: "reviewer" },
+      { ...base, name: "build", role: "builder" },
+    ];
+    expect(sortFleetRows(rows as never, "host", "role").map((row) => row.name)).toEqual(["build", "review", "none"]);
+  });
 });
 
 describe("swallowed-Enter detection", () => {

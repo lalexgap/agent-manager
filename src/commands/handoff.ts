@@ -58,6 +58,8 @@ export async function handoffAgent(
     message,
     dir: agent.dir,
     provider: target,
+    role: agent.role,
+    roleInstructions: agent.roleInstructions,
     jump: opts.jump,
     quiet: opts.quiet,
   });

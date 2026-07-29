@@ -44,6 +44,16 @@ describe("agentSystemPrompt", () => {
     expect(prompt).toContain('am send lead');
   });
 
+  test("composes a custom role after the managed-agent guidance", () => {
+    const prompt = agentSystemPrompt("worker", {
+      role: "security-reviewer",
+      roleInstructions: "Inspect trust boundaries and authentication.",
+    });
+    expect(prompt).toContain("# Your role: security-reviewer");
+    expect(prompt).toContain("Inspect trust boundaries and authentication.");
+    expect(prompt).toContain("am ls --json");
+  });
+
   test("the reserved concierge name selects the fleet-management prompt", () => {
     const prompt = agentSystemPrompt(CONCIERGE_NAME);
     expect(prompt).toContain("concierge");
@@ -142,6 +152,26 @@ describe("buildLaunchCommand", () => {
     expect(plan.command.at(-1)).toBe("check_for_update_on_startup=false");
   });
 
+  test("codex submits a taskless custom role so its instructions take effect", () => {
+    const plan = buildLaunchCommand("codex", "worker", {
+      role: "reviewer",
+      roleInstructions: "Review changes only.",
+    });
+    expect(plan.command.at(-1)).toContain("# Your role: reviewer");
+    expect(plan.command.at(-1)).toContain("Review changes only.");
+  });
+
+  test("codex keeps the bare resume selector positional-free and defers its role", () => {
+    const plan = buildLaunchCommand("codex", "worker", {
+      resume: true,
+      role: "reviewer",
+      roleInstructions: "Review changes only.",
+    });
+    expect(plan.command.at(-1)).toBe("resume");
+    expect(plan.deferredMessage).toContain("# Your role: reviewer");
+    expect(plan.deferredMessage).toContain("Review changes only.");
+  });
+
   test("claude threads --model and --effort when set", () => {
     const plan = buildLaunchCommand("claude", "worker", {
       message: "do the thing",
@@ -213,6 +243,16 @@ describe("buildResumeCommand", () => {
     const plan = buildResumeCommand("claude", agent({ claudeSessionId: "legacy-id" }), { remote: false });
     expect(plan.command).toContain("--resume");
     expect(plan.command).toContain("legacy-id");
+  });
+
+  test("claude resume reapplies the snapshotted role instructions", () => {
+    const plan = buildResumeCommand("claude", agent({
+      sessionId: "id-1",
+      role: "reviewer",
+      roleInstructions: "Review only; do not implement.",
+    }), { remote: false });
+    expect(plan.command.join(" ")).toContain("# Your role: reviewer");
+    expect(plan.command.join(" ")).toContain("Review only; do not implement.");
   });
 
   test("claude resume with remote control defers the message", () => {

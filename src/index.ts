@@ -44,6 +44,8 @@ import { summaryCommand } from "./commands/summary";
 import { deliverCommand } from "./deliver";
 import { runForegroundDaemon } from "./daemon";
 import { runTunnel } from "./tunnel";
+import { roleCommand } from "./commands/role";
+import { CONCIERGE_ROLE, listRoles } from "./roles";
 
 const HELP = `Agent Motel (am) — rooms for coding agents (Claude Code & Codex)
 
@@ -57,6 +59,7 @@ usage:
   am -                        jump to previous agent
   am new <name> [-m msg | -m - | --file path] [--dir path] [--codex]
                 [--remote | --no-remote] [--model <m>] [--effort <level>]
+                [--role <name>]
                               spawn a new agent in tmux and jump into it
                               (-m - reads the task from stdin, --file <path> from
                                a file — both dodge shell quoting for long tasks;
@@ -64,6 +67,7 @@ usage:
                                --codex / --claude pick the provider, overriding
                                config.defaultProvider (default: claude);
                                --model / --effort override the provider defaults)
+                              --role applies a named behavior preset
                               git repos get a fresh worktree on branch am/<name>
                               by default — --in-place uses the dir as-is,
                               --worktree <branch> picks the branch
@@ -73,12 +77,14 @@ usage:
                               spawn an agent from an existing conversation
                               (bare --resume opens the provider's session picker)
   am run <name> -m msg [--dir path] [--worktree b] [--codex]
-                       [--timeout secs] [--rm] [--json]
+                       [--role name] [--timeout secs] [--rm] [--json]
                               spawn a real agent, wait for its turn, print its
                               final message (for fan-out: the agent stays in
                               am ls unless --rm; exit 1 if blocked/timed out)
   am resume <name> [-m msg]   restart an exited agent, resuming its conversation
-  am ls [--json]              list agents with status and queue depth
+  am ls [--json] [--role r] [--sort status|recent|role]
+                              list agents with status, role, and queue depth;
+                              --role unassigned selects agents without a role
   am summary [--json]         prioritized fleet report: attention, active,
                               idle, exited, and unreachable hosts
   am concierge [question...]  open the fleet concierge: a reserved agent whose
@@ -91,6 +97,11 @@ usage:
                               Created on first use, revived automatically
                               (press c in the hub; --no-jump queues the
                               question and stays)
+  am role list [--json]       list built-in and custom roles
+  am role show <name>         print a role's instructions
+  am role add <name> -m msg   define a role (-m - or --file for long prompts;
+                              --description adds a short UI summary; --force replaces)
+  am role rm <name>           remove a custom role (built-ins are protected)
   am send <name> <msg...>     queue a message, delivered when agent goes idle
   am send <name> <msg> --now  type it into the session immediately (steer)
   am send <name> -            read the message body from stdin (no shell quoting
@@ -180,7 +191,7 @@ interface ParsedArgs {
   flags: Record<string, string | boolean>;
 }
 
-const VALUE_FLAGS = new Set(["m", "message", "dir", "worktree", "model", "effort", "to", "out", "host", "H", "port", "bind", "from", "report-to", "file", "timeout", "ssh-port", "limit", "agent-days", "trash-days", "status", "lines"]);
+const VALUE_FLAGS = new Set(["m", "message", "dir", "worktree", "model", "effort", "role", "sort", "description", "to", "out", "host", "H", "port", "bind", "from", "report-to", "file", "timeout", "ssh-port", "limit", "agent-days", "trash-days", "status", "lines"]);
 const OPTIONAL_VALUE_FLAGS = new Set(["resume"]);
 
 function parseArgs(argv: string[]): ParsedArgs {
@@ -371,6 +382,7 @@ async function pickerFlow(): Promise<void> {
       provider: string | undefined,
       model: string | undefined,
       effort: string | undefined,
+      role: string | undefined,
     ) => {
       await newCommand({
         name,
@@ -379,6 +391,7 @@ async function pickerFlow(): Promise<void> {
         provider: provider as Provider | undefined,
         model,
         effort,
+        role,
         jump: false,
         quiet: true,
       });
@@ -397,7 +410,12 @@ async function pickerFlow(): Promise<void> {
     handoff: handoffHandler,
     rename: renameHandler,
     regroup: () => `grouped by ${toggleGroupMode() === "dir" ? "directory" : "host"}`,
-    resort: () => toggleSortMode() === "recent" ? "sorted by most recent activity within groups" : "sorted by status within groups",
+    resort: () => {
+      const mode = toggleSortMode();
+      return mode === "recent"
+        ? "sorted by most recent activity within groups"
+        : mode === "role" ? "sorted by role within groups" : "sorted by status within groups";
+    },
     cd: cdHandler,
     cdPrefill: (key: string) => {
       const { host, name } = splitFleetKey(key);
@@ -406,6 +424,7 @@ async function pickerFlow(): Promise<void> {
     },
     defaultProvider: config.defaultProvider,
     worktreeByDefault: config.worktreeByDefault,
+    roleOptions: () => listRoles().filter((role) => role.name !== CONCIERGE_ROLE),
     // Inside tmux the palette floats over the picker; elsewhere the picker
     // falls back to its own full-screen overlay.
     palettePopup: insideTmux() ? showPalettePopup : undefined,
@@ -471,6 +490,7 @@ async function main(): Promise<void> {
         provider: args.flags.codex ? "codex" : args.flags.claude ? "claude" : undefined,
         model: args.flags.model as string | undefined,
         effort: args.flags.effort as string | undefined,
+        role: args.flags.role as string | undefined,
         resume: args.flags.resume as string | boolean | undefined,
         continue: !!args.flags.continue,
         jump: args.flags["no-jump"] ? false : undefined,
@@ -491,6 +511,7 @@ async function main(): Promise<void> {
         provider: args.flags.codex ? "codex" : args.flags.claude ? "claude" : undefined,
         model: args.flags.model as string | undefined,
         effort: args.flags.effort as string | undefined,
+        role: args.flags.role as string | undefined,
         timeoutSec: numberFlag(args, "timeout"),
         rm: !!args.flags.rm,
         json: !!args.flags.json,
@@ -505,7 +526,12 @@ async function main(): Promise<void> {
       break;
     case "ls":
     case "list":
-      lsCommand({ json: !!args.flags.json, localOnly: !!args.flags["local-only"] });
+      lsCommand({
+        json: !!args.flags.json,
+        localOnly: !!args.flags["local-only"],
+        role: args.flags.role as string | undefined,
+        sort: args.flags.sort as string | undefined,
+      });
       break;
     case "summary":
       summaryCommand({ json: !!args.flags.json, localOnly: !!args.flags["local-only"] });
@@ -514,6 +540,15 @@ async function main(): Promise<void> {
       await conciergeCommand({
         question: args.positional.join(" ") || ((args.flags.m ?? args.flags.message) as string | undefined),
         jump: args.flags["no-jump"] ? false : undefined,
+      });
+      break;
+    case "role":
+    case "roles":
+      roleCommand(args.positional[0], args.positional[1], {
+        json: !!args.flags.json,
+        instructions: await resolveTask(args.flags),
+        description: args.flags.description as string | undefined,
+        force: !!args.flags.force,
       });
       break;
     case "j":

@@ -7,10 +7,14 @@ import {
   feedbackBanner,
   filterPaletteCommands,
   formFields,
+  matchesPickerRole,
   parseMouseEvent,
+  pickerRoleFilterOptions,
+  preservedFieldIndex,
   renamedPickerKey,
   splitKeys,
   tmuxKeyBar,
+  visibleItemsForRole,
   visibleWidth,
   wrapTokens,
 } from "../src/picker";
@@ -22,6 +26,31 @@ const RED_C = "\x1b[38;2;247;118;142m";
 const RED = "\x1b[31m";
 const BG = "\x1b[48;5;236m";
 const RESET = "\x1b[0m";
+
+describe("role filtering", () => {
+  const items = [
+    { name: "review", label: "review", role: "reviewer" },
+    { name: "plain", label: "plain" },
+    { name: "offline:", label: "offline", roleFilterable: false },
+  ];
+
+  test("does not count unreachable placeholders as unassigned agents", () => {
+    expect(pickerRoleFilterOptions([items[0]!, items[2]!])).toEqual(["reviewer"]);
+    expect(pickerRoleFilterOptions(items)).toEqual(["reviewer", "unassigned"]);
+  });
+
+  test("hides placeholders whenever a role filter is active", () => {
+    expect(matchesPickerRole(items[2]!, null)).toBe(true);
+    expect(matchesPickerRole(items[2]!, "unassigned")).toBe(false);
+    expect(matchesPickerRole(items[0]!, "reviewer")).toBe(true);
+  });
+
+  test("an active role filter reveals matching exited agents", () => {
+    const exited = { name: "old-review", label: "old-review", role: "reviewer", secondary: true };
+    expect(visibleItemsForRole([exited], "", false, null)).toEqual([]);
+    expect(visibleItemsForRole([exited], "", false, "reviewer")).toEqual([exited]);
+  });
+});
 
 describe("visibleWidth", () => {
   test("ignores SGR escape sequences", () => {
@@ -131,6 +160,19 @@ describe("formFields", () => {
   test("adds the where field (before dir) only when remotes exist", () => {
     expect(formFields(false)).toEqual(["name", "task", "dir", "provider", "model", "effort"]);
     expect(formFields(true)).toEqual(["name", "task", "where", "dir", "provider", "model", "effort"]);
+  });
+
+  test("adds a role selector only when custom roles exist", () => {
+    expect(formFields(false, true)).toEqual(["name", "task", "dir", "role", "provider", "model", "effort"]);
+    expect(formFields(true, true)).toEqual(["name", "task", "where", "dir", "role", "provider", "model", "effort"]);
+  });
+
+  test("preserves focus by field identity when async roles insert a field", () => {
+    const before = formFields(true, false);
+    const after = formFields(true, true);
+    expect(before[5]).toBe("model");
+    expect(preservedFieldIndex(before, 5, after)).toBe(6);
+    expect(after[preservedFieldIndex(before, 5, after)]).toBe("model");
   });
 });
 

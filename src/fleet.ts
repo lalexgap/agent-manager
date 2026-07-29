@@ -193,7 +193,7 @@ async function refreshPreview(key: string, host: string, agentName: string): Pro
 // worktree dir would put every agent alone — else its dir). Toggled with
 // `g`; session-local.
 export type GroupMode = "host" | "dir";
-export type SortMode = "status" | "recent";
+export type SortMode = "status" | "recent" | "role";
 let groupMode: GroupMode = "host";
 let sortMode: SortMode = "status";
 
@@ -203,7 +203,7 @@ export function toggleGroupMode(): GroupMode {
 }
 
 export function toggleSortMode(): SortMode {
-  sortMode = sortMode === "status" ? "recent" : "status";
+  sortMode = sortMode === "status" ? "recent" : sortMode === "recent" ? "role" : "status";
   return sortMode;
 }
 
@@ -251,6 +251,12 @@ export function sortFleetRows(rows: FleetRow[], mode: GroupMode, sort: SortMode 
         || STATUS_PRIORITY[a.status] - STATUS_PRIORITY[b.status]
         || fleetKey(a).localeCompare(fleetKey(b));
     }
+    if (sort === "role") {
+      if (!!a.role !== !!b.role) return a.role ? -1 : 1;
+      return (a.role ?? "").localeCompare(b.role ?? "")
+        || STATUS_PRIORITY[a.status] - STATUS_PRIORITY[b.status]
+        || a.name.localeCompare(b.name);
+    }
     return STATUS_PRIORITY[a.status] - STATUS_PRIORITY[b.status] || a.name.localeCompare(b.name);
   });
 }
@@ -271,8 +277,8 @@ const CYAN = "\x1b[38;2;125;207;255m";
 // ahead of the name and the cyan identity color — it's idle most of the time,
 // and the mark is what keeps it findable then. Status still wins where it
 // carries signal: needs-attention stays amber, a gone session goes muted.
-export function conciergeRow(row: { name: string; status: AgentRow["status"] }): { label: string; labelStyle: string; role: string } | null {
-  if (row.name !== CONCIERGE_NAME) return null;
+export function conciergeRow(row: { name: string; role?: string; status: AgentRow["status"] }): { label: string; labelStyle: string; role: string } | null {
+  if ((row.role ?? (row.name === CONCIERGE_NAME ? CONCIERGE_NAME : undefined)) !== CONCIERGE_NAME) return null;
   const labelStyle = row.status === "needs-attention"
     ? AMBER
     : row.status === "exited" || row.status === "dead"
@@ -322,14 +328,17 @@ export function fleetPickerItems(): PickerItem[] {
       statusLabel: sidebarStatus(r.status),
       label: concierge?.label ?? r.name,
       labelStyle: concierge?.labelStyle ?? (r.status === "needs-attention" ? AMBER : r.status === "idle" ? MUTED : FG),
+      role: r.role,
       badge: r.provider === "codex" ? "cdx" : "cld",
       badgeStyle: r.provider === "codex" ? MUTED : PURPLE,
       badgeSelectedStyle: r.provider === "codex" ? BLUE : PURPLE,
       queueDepth: r.queued,
+      right: r.role && !concierge ? (r.role.length > 10 ? `${r.role.slice(0, 9)}…` : r.role) : undefined,
+      rightStyle: CYAN,
       // "front desk"/"assistant" make palette queries find the concierge.
-      search: `${r.task ?? ""} ${shortenHome(r.dir)} ${r.provider} ${r.host ?? "local"}${concierge ? " front desk assistant" : ""}`,
+      search: `${r.task ?? ""} ${shortenHome(r.dir)} ${r.provider} ${r.role ?? "unassigned"} ${r.host ?? "local"}${concierge ? " front desk assistant" : ""}`,
       meta: [
-        ...(concierge ? [`role     ${CYAN}${concierge.role}${FG}`] : []),
+        `role     ${r.role ? `${CYAN}${r.role}${FG}` : "—"}`,
         `host     ${r.host ?? "local"}`,
         `provider ${r.provider}`,
         r.worktreeBranch ? `branch   ${r.worktreeBranch}` : `dir      ${shortenHome(r.dir)}`,
@@ -349,6 +358,7 @@ export function fleetPickerItems(): PickerItem[] {
       iconStyle: STATUS_COLORS.dead,
       status: "dead",
       statusLabel: "unreachable",
+      roleFilterable: false,
       label: `(${shortHost(host)} unreachable)`,
       right: "",
       rightStyle: MUTED,

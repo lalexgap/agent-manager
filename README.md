@@ -41,7 +41,7 @@ am new bugfix --dir ~/code/other-repo            # use another repo
 am new gpt-take --codex --no-jump                # use Codex, stay in the hub
 
 am                         # open the hub
-am ls                      # list agents (--json for scripts)
+am ls                      # list agents (--json; --role/--sort for scripts)
 am summary                 # prioritized attention/active/idle fleet report
 am j api                   # jump by name prefix
 am -                       # return to the previous agent
@@ -55,13 +55,14 @@ Agents created in a git repository get a worktree on `am/<name>`. Pass `--in-pla
 
 ```sh
 am new <name> -m "task"                 # create an agent
+am new <name> -m "task" --role reviewer # apply custom instructions
 am new <name> --resume [session-id]     # adopt an existing conversation
 am run <name> -m "task"                # create, wait, and print the answer
 am pick                                 # open the classic picker
 am peek <name>                          # print the current screen
 ```
 
-In the hub, use `↑`/`↓` or `j`/`k` to select an agent, `Enter` or `→` to control it, `ctrl-q` to return to the sidebar, `ctrl-n` to create an agent, `s` to sort each group by recent activity, and `Esc` to detach. Inside an attached session, `ctrl-q` returns to the hub without stopping the agent.
+In the hub, use `↑`/`↓` or `j`/`k` to select an agent, `Enter` or `→` to control it, `ctrl-q` to return to the sidebar, `ctrl-n` to create an agent, `r` to filter by role, `s` to cycle status/recent/role sorting, and `Esc` to detach. Inside an attached session, `ctrl-q` returns to the hub without stopping the agent.
 
 ### Fleet concierge
 
@@ -73,6 +74,24 @@ am concierge which agent touched the auth flow?
 `concierge` is a reserved singleton agent that acts as the motel's front desk: its only job is answering questions about the other agents and doing safe fleet management for you — summarize what everyone is doing, find the agent that worked on something (via `am search`), revive exited agents, queue messages, and point you at the right session. In the hub, press `c` (or pick "Ask the concierge" in the `ctrl-k` palette) to jump to it from anywhere; its row is marked `✦ concierge` in cyan, and it is created on first use and revived automatically when its session has exited. It won't stop, interrupt, or remove agents unless you explicitly ask.
 
 There is one concierge per fleet, not per machine: if a concierge already exists on any reachable host, `am concierge` and the `c` key route to it over ssh instead of opening a rival one. Pin its home with `"conciergeHost"` in `~/.agent-manager/config.json` (`"local"` or a host alias — set the same value on every machine to share one front desk), and pick its provider with `"conciergeProvider": "claude" | "codex"` (default `claude`; applies when it's first created).
+
+### Roles
+
+Roles are named instruction presets for agents. They add behavior and a visible identity without changing the provider, model, permissions, or tools. The concierge is a protected built-in role; custom roles live as plain JSON files under `~/.agent-manager/roles/`.
+
+```sh
+am role list
+am role show concierge
+am role add security-reviewer \
+  --description "Reviews authentication and data exposure" \
+  -m "Review changes for trust-boundary, authentication, and disclosure risks. Report findings; do not implement fixes."
+am new auth-audit --role security-reviewer -m "Review the current branch"
+am role rm security-reviewer
+```
+
+Use `-m -` or `--file <path>` for multiline role instructions, and `--force` to replace an existing custom definition. Selected instructions are snapshotted into agent state, so existing agents keep their role across resume, restore, move, clone, and handoff even if the registry later changes. Role registries are host-local; manage a remote with `am -H <host> role ...` before creating that role there.
+
+The hub shows role tags on agent rows and detail cards. Press `r` to cycle role filters and `s` to cycle status, recent-activity, and role sorting; the command palette exposes the same controls. For scripts, use `am ls --role <name|unassigned>` and `am ls --sort <status|recent|role>`.
 
 ### Message and coordinate
 

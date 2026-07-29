@@ -8,6 +8,7 @@ import { sshAm, sshAmInteractive } from "../remote";
 import { newCommand, type NewOptions } from "./new";
 import { reviveAgent } from "./resume";
 import { sendCommand } from "./send";
+import { CONCIERGE_ROLE } from "../roles";
 
 // The concierge's whole value is the fleet-management system prompt (selected
 // by name in providers.ts), which works on either provider — codex just
@@ -19,6 +20,7 @@ export function conciergeNewOptions(question?: string): NewOptions {
   return {
     name: CONCIERGE_NAME,
     concierge: true,
+    role: CONCIERGE_ROLE,
     provider: loadConfig().conciergeProvider,
     dir: homedir(),
     inPlace: true,

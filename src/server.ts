@@ -14,6 +14,7 @@ import { stopAgent, destroyAgent } from "./commands/rm";
 import { reviveAgent } from "./commands/resume";
 import { renameAgent } from "./commands/rename";
 import { daemonRequest } from "./daemon";
+import { listRoles, roleForAgent } from "./roles";
 
 // The HTTP layer for remote clients — scripts, and the in-progress native
 // phone app (lives on its own branch; nothing on main consumes these routes).
@@ -96,6 +97,7 @@ function agentDetail(name: string) {
         : agent.statusReason ?? null,
     statusChangedAt: agent.statusChangedAt ?? agent.updatedAt,
     provider: agentProvider(agent),
+    role: roleForAgent(agent) ?? null,
     dir: agent.dir,
     task: agent.task ?? null,
     worktreeBranch: agent.worktreeBranch ?? null,
@@ -124,6 +126,10 @@ async function handleApi(req: Request, parts: string[]): Promise<Response> {
     return json({ rows: fleet.rows, unreachable: fleet.unreachable });
   }
 
+  if (parts.length === 1 && parts[0] === "roles" && method === "GET") {
+    return json({ roles: listRoles() });
+  }
+
   // GET /api/summary — the same prioritized fleet report as `am summary`.
   if (parts.length === 1 && parts[0] === "summary" && method === "GET") {
     return json(buildFleetSummary(cachedFleetRows()));
@@ -146,7 +152,7 @@ async function handleApi(req: Request, parts: string[]): Promise<Response> {
   // POST /api/agents — spawn a new (local) agent
   if (parts.length === 1 && parts[0] === "agents" && method === "POST") {
     const body = (await req.json().catch(() => null)) as
-      | { name?: string; task?: string; dir?: string; codex?: boolean }
+      | { name?: string; task?: string; dir?: string; codex?: boolean; role?: string }
       | null;
     if (!body?.name) return json({ error: "name required" }, 400);
     try {
@@ -155,6 +161,7 @@ async function handleApi(req: Request, parts: string[]): Promise<Response> {
         message: body.task,
         dir: body.dir,
         provider: body.codex ? "codex" : undefined,
+        role: body.role,
         jump: false,
         quiet: true,
       });
