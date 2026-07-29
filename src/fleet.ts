@@ -302,8 +302,6 @@ function diffDetail(row: FleetRow): string {
   return `${GREEN}+${row.diff.added}${FG} ${RED}−${row.diff.removed}${FG} · ${files}`;
 }
 
-// Shared list builder for the classic picker and the hub sidebar: one item
-// per agent across the whole fleet, keyed host:name for remote rows.
 export function fleetPickerItem(r: FleetRow): PickerItem {
   const concierge = conciergeRow(r);
   const since = relativeTime(r.statusChangedAt ?? r.updatedAt);
@@ -324,7 +322,7 @@ export function fleetPickerItem(r: FleetRow): PickerItem {
     queueDepth: r.queued,
     right: r.role && !concierge ? (r.role.length > 10 ? `${r.role.slice(0, 9)}…` : r.role) : undefined,
     rightStyle: CYAN,
-    since,
+    statusAge: since,
     // "front desk"/"assistant" make palette queries find the concierge.
     search: `${r.task ?? ""} ${shortenHome(r.dir)} ${r.provider} ${r.role ?? "unassigned"} ${r.host ?? "local"}${concierge ? " front desk assistant" : ""}`,
     meta: [

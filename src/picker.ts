@@ -28,9 +28,7 @@ export interface PickerItem {
   // Right-aligned role text, with an optional color on unselected rows.
   right?: string;
   rightStyle?: string;
-  // Relative age of the current status. Kept separate from `right` so the
-  // sidebar can always show it, while dropping the role first in tight rows.
-  since?: string;
+  statusAge?: string;
   // Extra text the filter matches against (task, dir) besides the name.
   search?: string;
   // Already-formatted detail lines shown in the sidebar under the list for
@@ -1390,14 +1388,11 @@ export async function pick(
         const icon = item.icon ?? "";
         const iconWidth = icon ? visibleWidth(icon) + 1 : 0;
         const requestedRight = item.right ?? "";
-        const since = item.since ?? "";
+        const statusAge = item.statusAge ?? "";
         const queue = (item.queueDepth ?? 0) > 0 ? `▸${item.queueDepth}` : "";
         const badge = item.badge ?? "";
-        // Status age is more useful at a glance than the role, which remains
-        // in the details card. On narrow/crowded rows, drop the role before
-        // allowing the agent name to collapse below a readable minimum.
         const fixedSuffixWidth =
-          (since ? visibleWidth(since) + 1 : 0) +
+          (statusAge ? visibleWidth(statusAge) + 1 : 0) +
           (queue ? visibleWidth(queue) + 1 : 0) +
           (badge ? visibleWidth(badge) + 2 : 0);
         const rightWidth = requestedRight ? visibleWidth(requestedRight) + 1 : 0;
@@ -1414,11 +1409,11 @@ export async function pick(
           ? `${THEME.bright}${BOLD}${label}${NORMAL_WEIGHT}${restore}`
           : `${item.labelStyle ?? THEME.text}${label}${restore}`;
         const rightSeg = right ? ` ${selectedRow ? THEME.muted : (item.rightStyle ?? THEME.muted)}${right}${restore}` : "";
-        const sinceSeg = since ? ` ${THEME.muted}${since}${restore}` : "";
+        const statusAgeSeg = statusAge ? ` ${THEME.muted}${statusAge}${restore}` : "";
         const queueSeg = queue ? ` ${THEME.yellow}${queue}${restore}` : "";
         const badgeStyle = (selectedRow ? item.badgeSelectedStyle : undefined) ?? item.badgeStyle ?? THEME.muted;
         const badgeSeg = badge ? ` ${badgeStyle}${badge}${restore} ` : "";
-        side.push({ text: prefix + iconSeg + labelSeg + rightSeg + sinceSeg + queueSeg + badgeSeg, style: rowStyle });
+        side.push({ text: prefix + iconSeg + labelSeg + rightSeg + statusAgeSeg + queueSeg + badgeSeg, style: rowStyle });
       });
       const end = Math.min(matches.length, start + listCapacity);
       if (end < matches.length) {

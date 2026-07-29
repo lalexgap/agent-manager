@@ -104,7 +104,7 @@ describe("sidebar status age", () => {
       dir: "/tmp",
     });
 
-    expect(item.since).toBe("1m ago");
+    expect(item.statusAge).toBe("1m ago");
     expect(item.meta).toContain("since    1m ago");
   });
 });
