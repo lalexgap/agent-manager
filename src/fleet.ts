@@ -304,6 +304,42 @@ function diffDetail(row: FleetRow): string {
 
 // Shared list builder for the classic picker and the hub sidebar: one item
 // per agent across the whole fleet, keyed host:name for remote rows.
+export function fleetPickerItem(r: FleetRow): PickerItem {
+  const concierge = conciergeRow(r);
+  const since = relativeTime(r.statusChangedAt ?? r.updatedAt);
+  return {
+    name: fleetKey(r),
+    section: sectionFor(r, groupMode),
+    secondary: r.status === "exited",
+    icon: STATUS_ICONS[r.status],
+    iconStyle: STATUS_COLORS[r.status],
+    status: r.status,
+    statusLabel: sidebarStatus(r.status),
+    label: concierge?.label ?? r.name,
+    labelStyle: concierge?.labelStyle ?? (r.status === "needs-attention" ? AMBER : r.status === "idle" ? MUTED : FG),
+    role: r.role,
+    badge: r.provider === "codex" ? "cdx" : "cld",
+    badgeStyle: r.provider === "codex" ? MUTED : PURPLE,
+    badgeSelectedStyle: r.provider === "codex" ? BLUE : PURPLE,
+    queueDepth: r.queued,
+    right: r.role && !concierge ? (r.role.length > 10 ? `${r.role.slice(0, 9)}…` : r.role) : undefined,
+    rightStyle: CYAN,
+    since,
+    // "front desk"/"assistant" make palette queries find the concierge.
+    search: `${r.task ?? ""} ${shortenHome(r.dir)} ${r.provider} ${r.role ?? "unassigned"} ${r.host ?? "local"}${concierge ? " front desk assistant" : ""}`,
+    meta: [
+      `role     ${r.role ? `${CYAN}${r.role}${FG}` : "—"}`,
+      `host     ${r.host ?? "local"}`,
+      `provider ${r.provider}`,
+      r.worktreeBranch ? `branch   ${r.worktreeBranch}` : `dir      ${shortenHome(r.dir)}`,
+      `reason   ${r.status === "waiting" ? (r.statusDetail ?? "—") : (r.statusReason ?? "—")}`,
+      `since    ${since}`,
+      `diff     ${diffDetail(r)}`,
+      `updated  ${relativeTime(r.updatedAt)}${r.diff?.dirty ? ` ${MUTED}· uncommitted${FG}` : ""}`,
+    ],
+  };
+}
+
 export function fleetPickerItems(): PickerItem[] {
   const { rows, unreachable } = cachedFleetRows();
   // Local active agents get live diffs from the non-blocking cache — any dir
@@ -316,39 +352,7 @@ export function fleetPickerItems(): PickerItem[] {
       : row,
   );
   const sorted = sortFleetRows(withDiff, groupMode, sortMode);
-  const items: PickerItem[] = sorted.map((r) => {
-    const concierge = conciergeRow(r);
-    return {
-      name: fleetKey(r),
-      section: sectionFor(r, groupMode),
-      secondary: r.status === "exited",
-      icon: STATUS_ICONS[r.status],
-      iconStyle: STATUS_COLORS[r.status],
-      status: r.status,
-      statusLabel: sidebarStatus(r.status),
-      label: concierge?.label ?? r.name,
-      labelStyle: concierge?.labelStyle ?? (r.status === "needs-attention" ? AMBER : r.status === "idle" ? MUTED : FG),
-      role: r.role,
-      badge: r.provider === "codex" ? "cdx" : "cld",
-      badgeStyle: r.provider === "codex" ? MUTED : PURPLE,
-      badgeSelectedStyle: r.provider === "codex" ? BLUE : PURPLE,
-      queueDepth: r.queued,
-      right: r.role && !concierge ? (r.role.length > 10 ? `${r.role.slice(0, 9)}…` : r.role) : undefined,
-      rightStyle: CYAN,
-      // "front desk"/"assistant" make palette queries find the concierge.
-      search: `${r.task ?? ""} ${shortenHome(r.dir)} ${r.provider} ${r.role ?? "unassigned"} ${r.host ?? "local"}${concierge ? " front desk assistant" : ""}`,
-      meta: [
-        `role     ${r.role ? `${CYAN}${r.role}${FG}` : "—"}`,
-        `host     ${r.host ?? "local"}`,
-        `provider ${r.provider}`,
-        r.worktreeBranch ? `branch   ${r.worktreeBranch}` : `dir      ${shortenHome(r.dir)}`,
-        `reason   ${r.status === "waiting" ? (r.statusDetail ?? "—") : (r.statusReason ?? "—")}`,
-        `since    ${relativeTime(r.statusChangedAt ?? r.updatedAt)}`,
-        `diff     ${diffDetail(r)}`,
-        `updated  ${relativeTime(r.updatedAt)}${r.diff?.dirty ? ` ${MUTED}· uncommitted${FG}` : ""}`,
-      ],
-    };
-  });
+  const items: PickerItem[] = sorted.map(fleetPickerItem);
   for (const host of unreachable) {
     items.push({
       name: `${host}:`,

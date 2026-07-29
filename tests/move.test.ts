@@ -9,7 +9,7 @@ import {
   parseMoveSpec,
   targetTranscriptPath,
 } from "../src/commands/move";
-import { fleetKey, sidebarStatus, sortFleetRows, splitFleetKey, shortHost } from "../src/fleet";
+import { fleetKey, fleetPickerItem, sidebarStatus, sortFleetRows, splitFleetKey, shortHost } from "../src/fleet";
 import { readAgent, type AgentState } from "../src/state";
 import { queueList } from "../src/queue";
 
@@ -88,6 +88,24 @@ describe("sidebar status labels", () => {
     expect(sidebarStatus("needs-attention")).toBe("needs you");
     expect(sidebarStatus("exited")).toBe("exited");
     expect(sidebarStatus("dead")).toBe("dead");
+  });
+});
+
+describe("sidebar status age", () => {
+  test("shows the status transition age on the list row and in details", () => {
+    const statusChangedAt = new Date(Date.now() - 70_000).toISOString();
+    const item = fleetPickerItem({
+      name: "demo",
+      status: "working",
+      statusChangedAt,
+      updatedAt: new Date().toISOString(),
+      provider: "codex",
+      queued: 0,
+      dir: "/tmp",
+    });
+
+    expect(item.since).toBe("1m ago");
+    expect(item.meta).toContain("since    1m ago");
   });
 });
 
