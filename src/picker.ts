@@ -25,9 +25,10 @@ export interface PickerItem {
   // the selection fill); falls back to badgeStyle.
   badgeSelectedStyle?: string;
   queueDepth?: number;
-  // Right-aligned activity text, with an optional color on unselected rows.
+  // Right-aligned role text, with an optional color on unselected rows.
   right?: string;
   rightStyle?: string;
+  statusAge?: string;
   // Extra text the filter matches against (task, dir) besides the name.
   search?: string;
   // Already-formatted detail lines shown in the sidebar under the list for
@@ -1386,14 +1387,21 @@ export async function pick(
         const prefix = selectedRow ? `${THEME.blue}▌${restore} ` : "  ";
         const icon = item.icon ?? "";
         const iconWidth = icon ? visibleWidth(icon) + 1 : 0;
-        const right = item.right ?? "";
+        const requestedRight = item.right ?? "";
+        const statusAge = item.statusAge ?? "";
         const queue = (item.queueDepth ?? 0) > 0 ? `▸${item.queueDepth}` : "";
         const badge = item.badge ?? "";
-        // Provider tag is plain colored text with a one-cell right inset.
-        const suffixWidth =
-          (right ? visibleWidth(right) + 1 : 0) +
+        const fixedSuffixWidth =
+          (statusAge ? visibleWidth(statusAge) + 1 : 0) +
           (queue ? visibleWidth(queue) + 1 : 0) +
           (badge ? visibleWidth(badge) + 2 : 0);
+        const rightWidth = requestedRight ? visibleWidth(requestedRight) + 1 : 0;
+        const minLabelWidth = Math.min(8, visibleWidth(item.label));
+        const right = sidebarWidth - 2 - iconWidth - fixedSuffixWidth - rightWidth >= minLabelWidth
+          ? requestedRight
+          : "";
+        // Provider tag is plain colored text with a one-cell right inset.
+        const suffixWidth = fixedSuffixWidth + (right ? rightWidth : 0);
         const labelWidth = Math.max(1, sidebarWidth - 2 - iconWidth - suffixWidth);
         const label = clipLine(item.label, labelWidth).padEnd(labelWidth);
         const iconSeg = icon ? `${item.iconStyle ?? THEME.muted}${icon}${restore} ` : "";
@@ -1401,10 +1409,11 @@ export async function pick(
           ? `${THEME.bright}${BOLD}${label}${NORMAL_WEIGHT}${restore}`
           : `${item.labelStyle ?? THEME.text}${label}${restore}`;
         const rightSeg = right ? ` ${selectedRow ? THEME.muted : (item.rightStyle ?? THEME.muted)}${right}${restore}` : "";
+        const statusAgeSeg = statusAge ? ` ${THEME.muted}${statusAge}${restore}` : "";
         const queueSeg = queue ? ` ${THEME.yellow}${queue}${restore}` : "";
         const badgeStyle = (selectedRow ? item.badgeSelectedStyle : undefined) ?? item.badgeStyle ?? THEME.muted;
         const badgeSeg = badge ? ` ${badgeStyle}${badge}${restore} ` : "";
-        side.push({ text: prefix + iconSeg + labelSeg + rightSeg + queueSeg + badgeSeg, style: rowStyle });
+        side.push({ text: prefix + iconSeg + labelSeg + rightSeg + statusAgeSeg + queueSeg + badgeSeg, style: rowStyle });
       });
       const end = Math.min(matches.length, start + listCapacity);
       if (end < matches.length) {
