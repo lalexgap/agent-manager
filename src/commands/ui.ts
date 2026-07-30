@@ -53,6 +53,25 @@ export function roleOptionsForHost(
   });
 }
 
+export function remoteNewCommandArgs(opts: {
+  name: string;
+  task?: string;
+  dir?: string;
+  provider?: Provider;
+  model?: string;
+  effort?: string;
+  role?: string;
+}): string[] {
+  const args = ["new", opts.name, "--no-jump"];
+  if (opts.task) args.push("-m", opts.task);
+  if (opts.dir) args.push("--dir", opts.dir);
+  if (opts.provider) args.push(`--${opts.provider}`);
+  if (opts.model) args.push("--model", opts.model);
+  if (opts.effort) args.push("--effort", opts.effort);
+  if (opts.role) args.push("--role", opts.role);
+  return args;
+}
+
 function hubTarget(): string {
   return `=${HUB_SESSION}:`;
 }
@@ -399,13 +418,15 @@ export async function sidebarCommand(): Promise<void> {
       if (host) {
         // Spawn on the remote via its own am; dir (if given) is a path on that
         // host, so it's passed through untouched — the remote am expands ~.
-        const args = ["new", name, "--no-jump"];
-        if (task) args.push("-m", task);
-        if (dir) args.push("--dir", dir);
-        if (provider === "codex") args.push("--codex");
-        if (model) args.push("--model", model);
-        if (effort) args.push("--effort", effort);
-        if (role) args.push("--role", role);
+        const args = remoteNewCommandArgs({
+          name,
+          task,
+          dir,
+          provider: provider as Provider | undefined,
+          model,
+          effort,
+          role,
+        });
         const res = sshAm(host, args);
         if (res.exitCode !== 0) throw new Error(res.stderr.trim() || `remote new on ${host} failed`);
         return `${host}:${name}`;
