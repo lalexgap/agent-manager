@@ -51,6 +51,12 @@ describe("role filtering", () => {
     expect(visibleItemsForRole([exited], "", false, null)).toEqual([]);
     expect(visibleItemsForRole([exited], "", false, "reviewer")).toEqual([exited]);
   });
+
+  test("can flatten the visible list without parent ordering or guides", () => {
+    const child = { name: "child", label: "child", parent: "parent", section: "local" };
+    const parent = { name: "parent", label: "parent", section: "local" };
+    expect(visibleItemsForRole([child, parent], "", true, null, false)).toEqual([child, parent]);
+  });
 });
 
 describe("parent nesting", () => {
@@ -230,6 +236,13 @@ describe("editMenuHelp", () => {
 describe("sidebar sort control", () => {
   test("surfaces the within-group activity toggle in the key bar", () => {
     expect(tmuxKeyBar("list", { resort: () => "ok" })).toContain(" s ");
+  });
+});
+
+describe("sidebar hierarchy control", () => {
+  test("surfaces the tree/flat toggle in the key bar", () => {
+    expect(tmuxKeyBar("list", {})).toContain(" t ");
+    expect(tmuxKeyBar("list", {})).toContain("tree/flat");
   });
 });
 
