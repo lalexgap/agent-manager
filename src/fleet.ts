@@ -305,8 +305,10 @@ function diffDetail(row: FleetRow): string {
 export function fleetPickerItem(r: FleetRow): PickerItem {
   const concierge = conciergeRow(r);
   const since = relativeTime(r.statusChangedAt ?? r.updatedAt);
+  const parent = r.spawnedBy ? fleetKey({ name: r.spawnedBy, host: r.host }) : undefined;
   return {
     name: fleetKey(r),
+    parent,
     section: sectionFor(r, groupMode),
     secondary: r.status === "exited",
     icon: STATUS_ICONS[r.status],
@@ -324,9 +326,10 @@ export function fleetPickerItem(r: FleetRow): PickerItem {
     rightStyle: CYAN,
     statusAge: since,
     // "front desk"/"assistant" make palette queries find the concierge.
-    search: `${r.task ?? ""} ${shortenHome(r.dir)} ${r.provider} ${r.role ?? "unassigned"} ${r.host ?? "local"}${concierge ? " front desk assistant" : ""}`,
+    search: `${r.task ?? ""} ${shortenHome(r.dir)} ${r.provider} ${r.role ?? "unassigned"} ${r.host ?? "local"} ${r.spawnedBy ?? ""}${concierge ? " front desk assistant" : ""}`,
     meta: [
       `role     ${r.role ? `${CYAN}${r.role}${FG}` : "—"}`,
+      ...(r.spawnedBy ? [`parent   ${r.spawnedBy}`] : []),
       `host     ${r.host ?? "local"}`,
       `provider ${r.provider}`,
       r.worktreeBranch ? `branch   ${r.worktreeBranch}` : `dir      ${shortenHome(r.dir)}`,

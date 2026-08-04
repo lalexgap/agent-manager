@@ -4,6 +4,8 @@ import { localAgentMatches, search } from "./search";
 export interface PickerItem {
   name: string;
   label: string;
+  parent?: string;
+  depth?: number;
   // Leading status glyph, colored (iconStyle) independently of the label so
   // state reads at a glance. On the highlighted row the inverse bar owns the
   // colors, so the glyph there renders plain.
@@ -68,7 +70,41 @@ export function visibleItemsForRole(
 ): PickerItem[] {
   // Choosing a role is an explicit search, just like typing a text filter, so
   // matching exited agents should not disappear behind the default view.
-  return visibleItems(items, filter, showAll || !!role).filter((item) => matchesPickerRole(item, role));
+  const visible = visibleItems(items, filter, showAll || !!role)
+    .filter((item) => matchesPickerRole(item, role));
+  return nestPickerItems(visible);
+}
+
+export function nestPickerItems(items: PickerItem[]): PickerItem[] {
+  const byName = new Map(items.map((item) => [item.name, item]));
+  const children = new Map<string, PickerItem[]>();
+  const hasVisibleParent = new Set<string>();
+
+  for (const item of items) {
+    const parent = item.parent ? byName.get(item.parent) : undefined;
+    if (!parent || parent === item || parent.section !== item.section) continue;
+    const siblings = children.get(parent.name) ?? [];
+    siblings.push(item);
+    children.set(parent.name, siblings);
+    hasVisibleParent.add(item.name);
+  }
+
+  const nested: PickerItem[] = [];
+  const emitted = new Set<string>();
+  const append = (item: PickerItem, depth: number) => {
+    if (emitted.has(item.name)) return;
+    emitted.add(item.name);
+    const { depth: _oldDepth, ...clean } = item;
+    nested.push(depth > 0 ? { ...clean, depth } : clean);
+    for (const child of children.get(item.name) ?? []) append(child, depth + 1);
+  };
+
+  for (const item of items) {
+    if (!hasVisibleParent.has(item.name)) append(item, 0);
+  }
+  // Keep parent cycles visible instead of dropping those rows.
+  for (const item of items) append(item, 0);
+  return nested;
 }
 
 // Action results render as a colored banner under the header. A bare string
@@ -1385,6 +1421,7 @@ export async function pick(
         const rowStyle = selectedRow ? THEME.selected : isAttention ? THEME.text + THEME.attention : THEME.sidebar;
         const restore = rowStyle;
         const prefix = selectedRow ? `${THEME.blue}▌${restore} ` : "  ";
+        const indent = "  ".repeat(item.depth ?? 0);
         const icon = item.icon ?? "";
         const iconWidth = icon ? visibleWidth(icon) + 1 : 0;
         const requestedRight = item.right ?? "";
@@ -1397,12 +1434,12 @@ export async function pick(
           (badge ? visibleWidth(badge) + 2 : 0);
         const rightWidth = requestedRight ? visibleWidth(requestedRight) + 1 : 0;
         const minLabelWidth = Math.min(8, visibleWidth(item.label));
-        const right = sidebarWidth - 2 - iconWidth - fixedSuffixWidth - rightWidth >= minLabelWidth
+        const right = sidebarWidth - 2 - indent.length - iconWidth - fixedSuffixWidth - rightWidth >= minLabelWidth
           ? requestedRight
           : "";
         // Provider tag is plain colored text with a one-cell right inset.
         const suffixWidth = fixedSuffixWidth + (right ? rightWidth : 0);
-        const labelWidth = Math.max(1, sidebarWidth - 2 - iconWidth - suffixWidth);
+        const labelWidth = Math.max(1, sidebarWidth - 2 - indent.length - iconWidth - suffixWidth);
         const label = clipLine(item.label, labelWidth).padEnd(labelWidth);
         const iconSeg = icon ? `${item.iconStyle ?? THEME.muted}${icon}${restore} ` : "";
         const labelSeg = selectedRow
@@ -1413,7 +1450,7 @@ export async function pick(
         const queueSeg = queue ? ` ${THEME.yellow}${queue}${restore}` : "";
         const badgeStyle = (selectedRow ? item.badgeSelectedStyle : undefined) ?? item.badgeStyle ?? THEME.muted;
         const badgeSeg = badge ? ` ${badgeStyle}${badge}${restore} ` : "";
-        side.push({ text: prefix + iconSeg + labelSeg + rightSeg + statusAgeSeg + queueSeg + badgeSeg, style: rowStyle });
+        side.push({ text: prefix + indent + iconSeg + labelSeg + rightSeg + statusAgeSeg + queueSeg + badgeSeg, style: rowStyle });
       });
       const end = Math.min(matches.length, start + listCapacity);
       if (end < matches.length) {

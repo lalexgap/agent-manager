@@ -8,6 +8,7 @@ import {
   filterPaletteCommands,
   formFields,
   matchesPickerRole,
+  nestPickerItems,
   parseMouseEvent,
   pickerRoleFilterOptions,
   preservedFieldIndex,
@@ -49,6 +50,43 @@ describe("role filtering", () => {
     const exited = { name: "old-review", label: "old-review", role: "reviewer", secondary: true };
     expect(visibleItemsForRole([exited], "", false, null)).toEqual([]);
     expect(visibleItemsForRole([exited], "", false, "reviewer")).toEqual([exited]);
+  });
+});
+
+describe("parent nesting", () => {
+  test("places descendants after their parent while preserving sibling rank", () => {
+    const items = [
+      { name: "urgent-child", label: "urgent-child", parent: "parent", section: "local" },
+      { name: "root", label: "root", section: "local" },
+      { name: "parent", label: "parent", section: "local" },
+      { name: "grandchild", label: "grandchild", parent: "urgent-child", section: "local" },
+      { name: "later-child", label: "later-child", parent: "parent", section: "local" },
+    ];
+
+    expect(nestPickerItems(items).map((item) => [item.name, item.depth ?? 0])).toEqual([
+      ["root", 0],
+      ["parent", 0],
+      ["urgent-child", 1],
+      ["grandchild", 2],
+      ["later-child", 1],
+    ]);
+  });
+
+  test("promotes children when their parent is hidden or in another section", () => {
+    const child = { name: "child", label: "child", parent: "parent", section: "local" };
+    expect(nestPickerItems([child])).toEqual([child]);
+    expect(nestPickerItems([
+      { name: "parent", label: "parent", section: "remote" },
+      child,
+    ]).map((item) => [item.name, item.depth ?? 0])).toEqual([["parent", 0], ["child", 0]]);
+  });
+
+  test("keeps every agent visible when malformed state contains a cycle", () => {
+    const nested = nestPickerItems([
+      { name: "alpha", label: "alpha", parent: "beta", section: "local" },
+      { name: "beta", label: "beta", parent: "alpha", section: "local" },
+    ]);
+    expect(nested.map((item) => item.name)).toEqual(["alpha", "beta"]);
   });
 });
 

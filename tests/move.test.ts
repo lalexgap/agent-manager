@@ -263,6 +263,25 @@ describe("sortFleetRows", () => {
   });
 });
 
+describe("fleetPickerItem parent relationship", () => {
+  test("uses host-qualified parent keys and shows the parent in details", () => {
+    const base = {
+      name: "child",
+      spawnedBy: "parent",
+      status: "idle",
+      provider: "claude",
+      queued: 0,
+      updatedAt: new Date().toISOString(),
+      dir: "/tmp/app",
+    } as const;
+
+    expect(fleetPickerItem(base as never)).toMatchObject({ parent: "parent" });
+    const remote = fleetPickerItem({ ...base, host: "server" } as never);
+    expect(remote.parent).toBe("server:parent");
+    expect(remote.meta).toContain("parent   parent");
+  });
+});
+
 describe("swallowed-Enter detection", () => {
   const SEP = "─".repeat(40);
 
