@@ -280,6 +280,21 @@ describe("fleetPickerItem parent relationship", () => {
     expect(remote.parent).toBe("server:parent");
     expect(remote.meta).toContain("parent   parent");
   });
+
+  test("treats agents spawned by the concierge as top-level", () => {
+    const item = fleetPickerItem({
+      name: "worker",
+      spawnedBy: "concierge",
+      status: "working",
+      provider: "claude",
+      queued: 0,
+      updatedAt: new Date().toISOString(),
+      dir: "/tmp/app",
+    } as never);
+
+    expect(item.parent).toBeUndefined();
+    expect(item.meta).not.toContain("parent   concierge");
+  });
 });
 
 describe("swallowed-Enter detection", () => {
