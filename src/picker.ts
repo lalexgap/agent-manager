@@ -4,8 +4,6 @@ import { localAgentMatches, search } from "./search";
 export interface PickerItem {
   name: string;
   label: string;
-  // Fleet key of the agent that spawned this one. The sidebar uses this to
-  // turn the otherwise sorted fleet into a parent-first, indented tree.
   parent?: string;
   depth?: number;
   // Leading status glyph, colored (iconStyle) independently of the label so
@@ -77,10 +75,6 @@ export function visibleItemsForRole(
   return nestPickerItems(visible);
 }
 
-// Preserve the fleet's existing sort as the rank among roots and siblings,
-// but keep each visible child immediately after its parent. Relationships do
-// not cross section boundaries: host/project grouping remains contiguous, and
-// a child whose parent is filtered out simply becomes a root for that view.
 export function nestPickerItems(items: PickerItem[]): PickerItem[] {
   const byName = new Map(items.map((item) => [item.name, item]));
   const children = new Map<string, PickerItem[]>();
@@ -108,8 +102,7 @@ export function nestPickerItems(items: PickerItem[]): PickerItem[] {
   for (const item of items) {
     if (!hasVisibleParent.has(item.name)) append(item, 0);
   }
-  // Malformed legacy state can contain a parent cycle. Keep every row visible
-  // instead of dropping that cycle from the sidebar.
+  // Keep parent cycles visible instead of dropping those rows.
   for (const item of items) append(item, 0);
   return nested;
 }
