@@ -63,12 +63,12 @@ describe("parent nesting", () => {
       { name: "later-child", label: "later-child", parent: "parent", section: "local" },
     ];
 
-    expect(nestPickerItems(items).map((item) => [item.name, item.depth ?? 0])).toEqual([
-      ["root", 0],
-      ["parent", 0],
-      ["urgent-child", 1],
-      ["grandchild", 2],
-      ["later-child", 1],
+    expect(nestPickerItems(items).map((item) => [item.name, item.depth ?? 0, item.treePrefix ?? ""])).toEqual([
+      ["root", 0, ""],
+      ["parent", 0, ""],
+      ["urgent-child", 1, "├─ "],
+      ["grandchild", 2, "│  └─ "],
+      ["later-child", 1, "└─ "],
     ]);
   });
 
