@@ -6,6 +6,7 @@ export interface PickerItem {
   label: string;
   parent?: string;
   depth?: number;
+  treePrefix?: string;
   // Leading status glyph, colored (iconStyle) independently of the label so
   // state reads at a glance. On the highlighted row the inverse bar owns the
   // colors, so the glyph there renders plain.
@@ -67,12 +68,13 @@ export function visibleItemsForRole(
   filter: string,
   showAll: boolean,
   role: string | null,
+  showHierarchy = true,
 ): PickerItem[] {
   // Choosing a role is an explicit search, just like typing a text filter, so
   // matching exited agents should not disappear behind the default view.
   const visible = visibleItems(items, filter, showAll || !!role)
     .filter((item) => matchesPickerRole(item, role));
-  return nestPickerItems(visible);
+  return showHierarchy ? nestPickerItems(visible) : visible;
 }
 
 export function nestPickerItems(items: PickerItem[]): PickerItem[] {
@@ -91,19 +93,32 @@ export function nestPickerItems(items: PickerItem[]): PickerItem[] {
 
   const nested: PickerItem[] = [];
   const emitted = new Set<string>();
-  const append = (item: PickerItem, depth: number) => {
+  const append = (
+    item: PickerItem,
+    ancestorContinues: boolean[],
+    branch: "middle" | "last" | null,
+  ) => {
     if (emitted.has(item.name)) return;
     emitted.add(item.name);
-    const { depth: _oldDepth, ...clean } = item;
-    nested.push(depth > 0 ? { ...clean, depth } : clean);
-    for (const child of children.get(item.name) ?? []) append(child, depth + 1);
+    const { depth: _oldDepth, treePrefix: _oldTreePrefix, ...clean } = item;
+    const treePrefix = branch
+      ? ancestorContinues.map((continues) => continues ? "│  " : "   ").join("")
+        + (branch === "middle" ? "├─ " : "└─ ")
+      : undefined;
+    nested.push(branch ? { ...clean, depth: ancestorContinues.length + 1, treePrefix } : clean);
+
+    const childItems = children.get(item.name) ?? [];
+    childItems.forEach((child, index) => {
+      const childBranch = index === childItems.length - 1 ? "last" : "middle";
+      append(child, branch ? [...ancestorContinues, branch === "middle"] : [], childBranch);
+    });
   };
 
   for (const item of items) {
-    if (!hasVisibleParent.has(item.name)) append(item, 0);
+    if (!hasVisibleParent.has(item.name)) append(item, [], null);
   }
   // Keep parent cycles visible instead of dropping those rows.
-  for (const item of items) append(item, 0);
+  for (const item of items) append(item, [], null);
   return nested;
 }
 
@@ -762,6 +777,7 @@ function keyBarHints(mode: Mode, handlers: PickerHandlers, active: boolean): { l
       ...(handlers.concierge ? [{ key: "c", label: "concierge" }] : []),
       { key: "f", label: "filter" },
       { key: "r", label: "role" },
+      { key: "t", label: "tree/flat" },
       ...(handlers.regroup ? [{ key: "g", label: "group" }] : []),
       ...(handlers.resort ? [{ key: "s", label: "sort" }] : []),
       ...(hasEditActions(handlers) ? [{ key: "e", label: "edit" }] : []),
@@ -967,6 +983,7 @@ export async function pick(
   };
 
   let showAll = false;
+  let showHierarchy = true;
   let roleFilter: string | null = null;
   const matchesRole = (item: PickerItem) => matchesPickerRole(item, roleFilter);
   const filtered = () => {
@@ -981,7 +998,7 @@ export async function pick(
         .filter(matchesRole)
         .map((i) => ({ ...i, meta: [`match    ${chatMatch!.get(i.name) ?? ""}`, ...(i.meta ?? [])] }));
     }
-    return visibleItemsForRole(items, filter, showAll, roleFilter);
+    return visibleItemsForRole(items, filter, showAll, roleFilter, showHierarchy);
   };
 
   const paletteCommands = (): PaletteCommand[] => {
@@ -1004,6 +1021,12 @@ export async function pick(
         label: showAll ? "Hide exited agents" : "Show exited agents",
         keywords: "all dead stopped",
         shortcut: "a",
+      },
+      {
+        id: "toggle-hierarchy",
+        label: showHierarchy ? "Flatten agent hierarchy" : "Show agent hierarchy",
+        keywords: "tree flat parent child nesting indentation",
+        shortcut: "t",
       },
       handlers.regroup && { id: "regroup", label: "Toggle host/project grouping", keywords: "group directory", shortcut: "g" },
       handlers.resort && { id: "resort", label: "Cycle status/recent/role sort", keywords: "sort recent newest latest updated role", shortcut: "s" },
@@ -1385,6 +1408,7 @@ export async function pick(
         ...(handlers.concierge ? [`${key("c")} ask the concierge`] : []),
         `${key("f")} filter names/tasks`,
         `${key("r")} filter by role`,
+        `${key("t")} toggle tree/flat list`,
         `${key("/")} search conversations`,
         `${key("ctrl-k")} command palette`,
         ...(handlers.regroup ? [`${key("g")} group host/project`] : []),
@@ -1421,7 +1445,8 @@ export async function pick(
         const rowStyle = selectedRow ? THEME.selected : isAttention ? THEME.text + THEME.attention : THEME.sidebar;
         const restore = rowStyle;
         const prefix = selectedRow ? `${THEME.blue}▌${restore} ` : "  ";
-        const indent = "  ".repeat(item.depth ?? 0);
+        const treePrefix = item.treePrefix ?? "";
+        const treePrefixWidth = visibleWidth(treePrefix);
         const icon = item.icon ?? "";
         const iconWidth = icon ? visibleWidth(icon) + 1 : 0;
         const requestedRight = item.right ?? "";
@@ -1434,13 +1459,14 @@ export async function pick(
           (badge ? visibleWidth(badge) + 2 : 0);
         const rightWidth = requestedRight ? visibleWidth(requestedRight) + 1 : 0;
         const minLabelWidth = Math.min(8, visibleWidth(item.label));
-        const right = sidebarWidth - 2 - indent.length - iconWidth - fixedSuffixWidth - rightWidth >= minLabelWidth
+        const right = sidebarWidth - 2 - treePrefixWidth - iconWidth - fixedSuffixWidth - rightWidth >= minLabelWidth
           ? requestedRight
           : "";
         // Provider tag is plain colored text with a one-cell right inset.
         const suffixWidth = fixedSuffixWidth + (right ? rightWidth : 0);
-        const labelWidth = Math.max(1, sidebarWidth - 2 - indent.length - iconWidth - suffixWidth);
+        const labelWidth = Math.max(1, sidebarWidth - 2 - treePrefixWidth - iconWidth - suffixWidth);
         const label = clipLine(item.label, labelWidth).padEnd(labelWidth);
+        const treeSeg = treePrefix ? `${THEME.muted}${treePrefix}${restore}` : "";
         const iconSeg = icon ? `${item.iconStyle ?? THEME.muted}${icon}${restore} ` : "";
         const labelSeg = selectedRow
           ? `${THEME.bright}${BOLD}${label}${NORMAL_WEIGHT}${restore}`
@@ -1450,7 +1476,7 @@ export async function pick(
         const queueSeg = queue ? ` ${THEME.yellow}${queue}${restore}` : "";
         const badgeStyle = (selectedRow ? item.badgeSelectedStyle : undefined) ?? item.badgeStyle ?? THEME.muted;
         const badgeSeg = badge ? ` ${badgeStyle}${badge}${restore} ` : "";
-        side.push({ text: prefix + indent + iconSeg + labelSeg + rightSeg + statusAgeSeg + queueSeg + badgeSeg, style: rowStyle });
+        side.push({ text: prefix + treeSeg + iconSeg + labelSeg + rightSeg + statusAgeSeg + queueSeg + badgeSeg, style: rowStyle });
       });
       const end = Math.min(matches.length, start + listCapacity);
       if (end < matches.length) {
@@ -1797,6 +1823,11 @@ export async function pick(
         case "toggle-all":
           mode = "list";
           showAll = !showAll;
+          break;
+        case "toggle-hierarchy":
+          mode = "list";
+          showHierarchy = !showHierarchy;
+          feedback = { text: showHierarchy ? "showing parent tree" : "showing flat list", level: "info" };
           break;
         case "regroup":
           mode = "list";
@@ -2319,6 +2350,9 @@ export async function pick(
       } else if (key === "a") {
         showAll = !showAll;
         feedback = null;
+      } else if (key === "t") {
+        showHierarchy = !showHierarchy;
+        feedback = { text: showHierarchy ? "showing parent tree" : "showing flat list", level: "info" };
       } else if (key === "r") {
         const options = pickerRoleFilterOptions(items);
         const current = roleFilter ? options.indexOf(roleFilter) : -1;

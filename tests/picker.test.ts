@@ -51,6 +51,12 @@ describe("role filtering", () => {
     expect(visibleItemsForRole([exited], "", false, null)).toEqual([]);
     expect(visibleItemsForRole([exited], "", false, "reviewer")).toEqual([exited]);
   });
+
+  test("can flatten the visible list without parent ordering or guides", () => {
+    const child = { name: "child", label: "child", parent: "parent", section: "local" };
+    const parent = { name: "parent", label: "parent", section: "local" };
+    expect(visibleItemsForRole([child, parent], "", true, null, false)).toEqual([child, parent]);
+  });
 });
 
 describe("parent nesting", () => {
@@ -63,12 +69,12 @@ describe("parent nesting", () => {
       { name: "later-child", label: "later-child", parent: "parent", section: "local" },
     ];
 
-    expect(nestPickerItems(items).map((item) => [item.name, item.depth ?? 0])).toEqual([
-      ["root", 0],
-      ["parent", 0],
-      ["urgent-child", 1],
-      ["grandchild", 2],
-      ["later-child", 1],
+    expect(nestPickerItems(items).map((item) => [item.name, item.depth ?? 0, item.treePrefix ?? ""])).toEqual([
+      ["root", 0, ""],
+      ["parent", 0, ""],
+      ["urgent-child", 1, "├─ "],
+      ["grandchild", 2, "│  └─ "],
+      ["later-child", 1, "└─ "],
     ]);
   });
 
@@ -230,6 +236,13 @@ describe("editMenuHelp", () => {
 describe("sidebar sort control", () => {
   test("surfaces the within-group activity toggle in the key bar", () => {
     expect(tmuxKeyBar("list", { resort: () => "ok" })).toContain(" s ");
+  });
+});
+
+describe("sidebar hierarchy control", () => {
+  test("surfaces the tree/flat toggle in the key bar", () => {
+    expect(tmuxKeyBar("list", {})).toContain(" t ");
+    expect(tmuxKeyBar("list", {})).toContain("tree/flat");
   });
 });
 
