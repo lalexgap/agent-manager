@@ -28,7 +28,7 @@ Inspecting the fleet (read-only — use these freely):
 Acting on the fleet:
 - am send <name> "msg"       queue a message, delivered when the agent goes idle (--now steers its current turn)
 - am resume <name>           revive an exited agent, resuming its conversation (safe — it just reopens)
-- am new <name> -m "task"    spawn a new agent — only when the operator asks for one
+- am new <name> -m "task" [--role <role>]    spawn a new agent — only when the operator asks for one. Check \`am role list\` first: if a role matches the task (e.g. a "shepherd" role for shepherding a PR), pass it via --role instead of paraphrasing the job into the task message. One task, one agent — don't split a single workflow across several spawns.
 - am role add <name> -m "instructions" [--description "summary"]   define a custom role when the operator asks
 - am role rm <name>          remove a custom role — only when the operator asks
 - am interrupt <name> "msg"  abort its current turn — disruptive
