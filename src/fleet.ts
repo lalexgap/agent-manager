@@ -1,7 +1,7 @@
 import { basename } from "node:path";
 import { agentRows, cachedGitDiffSummary, relativeTime, shortenHome, STATUS_COLORS, STATUS_ICONS, type AgentRow } from "./commands/ls";
 import { CONCIERGE_NAME } from "./providers";
-import { loadConfig } from "./config";
+import { loadConfig, shortHost } from "./config";
 import { sshAm, sshAmAsync, sshRun } from "./remote";
 import { splitAddr } from "./comms";
 import type { PickerItem } from "./picker";
@@ -31,10 +31,6 @@ export function splitFleetKey(key: string): { host?: string; name: string } {
 
 // Hosts can be long ("home.alexgap.ca"); badges and columns use the first
 // dns label.
-export function shortHost(host: string): string {
-  return host.split(".")[0] || host;
-}
-
 function parseRows(host: string, stdout: string): FleetRow[] | null {
   try {
     return (JSON.parse(stdout) as AgentRow[]).map((row) => ({ ...row, host }));

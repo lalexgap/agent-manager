@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { hostname, tmpdir } from "node:os";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   agentSystemPrompt,
   buildLaunchCommand,
@@ -7,6 +10,7 @@ import {
   CONCIERGE_NAME,
 } from "../src/providers";
 import type { AgentState } from "../src/state";
+import { shortHost } from "../src/config";
 
 describe("codexConversationArgs", () => {
   test("maps resume/continue onto the codex resume subcommand", () => {
@@ -52,6 +56,34 @@ describe("agentSystemPrompt", () => {
     expect(prompt).toContain("# Your role: security-reviewer");
     expect(prompt).toContain("Inspect trust boundaries and authentication.");
     expect(prompt).toContain("am ls --json");
+  });
+
+  test("names the host it runs on and warns about machine-local URLs", () => {
+    const home = mkdtempSync(join(tmpdir(), "am-test-"));
+    process.env.AGENTMGR_HOME = home;
+    try {
+      const prompt = agentSystemPrompt("worker");
+      expect(prompt).toContain(`You are running on the host "${shortHost(hostname())}"`);
+      expect(prompt).toContain("ph.test");
+      expect(prompt).toContain("ssh -L");
+    } finally {
+      delete process.env.AGENTMGR_HOME;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("prefers the configured hostAlias as the host identity", () => {
+    const home = mkdtempSync(join(tmpdir(), "am-test-"));
+    process.env.AGENTMGR_HOME = home;
+    try {
+      writeFileSync(join(home, "config.json"), JSON.stringify({ hostAlias: "gapserver" }));
+      const prompt = agentSystemPrompt("worker");
+      expect(prompt).toContain('You are running on the host "gapserver"');
+      expect(prompt).toContain("only resolve ON gapserver");
+    } finally {
+      delete process.env.AGENTMGR_HOME;
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 
   test("the reserved concierge name selects the fleet-management prompt", () => {

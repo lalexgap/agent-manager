@@ -1,5 +1,5 @@
 import { writeHookSettings } from "./settings";
-import { loadConfig } from "./config";
+import { loadConfig, localHostIdentity } from "./config";
 import { type AgentState, type Provider, agentSessionId } from "./state";
 import { CONCIERGE_ROLE, getRole, roleForAgent } from "./roles";
 
@@ -25,7 +25,10 @@ export function agentSystemPrompt(
   const rolePrompt = role && roleInstructions
     ? `\n\n# Your role: ${role}\n\n${roleInstructions}`
     : "";
+  const host = localHostIdentity();
   return `You are running as a managed agent named "${name}" in a tmux session controlled by the \`am\` CLI (Agent Motel). Other managed agents may be running in parallel.
+
+You are running on the host "${host}". The operator may be reading your output from a DIFFERENT machine, so never present machine-local URLs or paths as if they were theirs: localhost, 127.0.0.1, and local-DNS dev domains (e.g. *.test names like ph.test) only resolve ON ${host}. When you share such a URL, label it — "on ${host}: http://…" — and give a way to reach it from elsewhere: the host's network address with the same port, or an ssh port-forward (ssh -L <port>:localhost:<port> ${host}).
 
 When asked to spin up, message, check on, or stop OTHER AGENTS, use the am CLI via Bash — not your built-in Task/subagent tool. Spawn a real am agent when delegating a WHOLE task that should be visible, attachable, and steerable on its own. Work that is part of a task you own stays in your session: a workflow you're running end to end (a review loop, shepherding a PR) is one agent's job — do each pass yourself, using your built-in Task tool for scoped lookups and short-lived subtasks, and never spawn am agents for passes of it:
 

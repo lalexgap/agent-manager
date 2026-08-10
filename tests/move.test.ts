@@ -9,7 +9,8 @@ import {
   parseMoveSpec,
   targetTranscriptPath,
 } from "../src/commands/move";
-import { fleetKey, fleetPickerItem, sidebarStatus, sortFleetRows, splitFleetKey, shortHost } from "../src/fleet";
+import { fleetKey, fleetPickerItem, sidebarStatus, sortFleetRows, splitFleetKey } from "../src/fleet";
+import { shortHost } from "../src/config";
 import { readAgent, type AgentState } from "../src/state";
 import { queueList } from "../src/queue";
 

@@ -31,8 +31,8 @@ import { cdHandler, cloneHandler, handoffHandler, moveHandler, renameHandler } f
 import { isForwardable, remoteExec, sshAm, sshAmInteractive, stripHostArgs } from "./remote";
 import { resolveSender } from "./comms";
 import { resolveTask } from "./task";
-import { cachedRemotePreview, cachedRemoteRow, fleetPickerItems, fleetRows, splitFleetKey, shortHost, toggleGroupMode, toggleSortMode } from "./fleet";
-import { loadConfig } from "./config";
+import { cachedRemotePreview, cachedRemoteRow, fleetPickerItems, fleetRows, splitFleetKey, toggleGroupMode, toggleSortMode } from "./fleet";
+import { loadConfig, localHostIdentity, shortHost } from "./config";
 import { capturePane, hasSession, insideTmux } from "./tmux";
 import { readSnapshot } from "./snapshots";
 import { expandHome } from "./paths";
@@ -276,8 +276,7 @@ function injectSender(command: string | undefined, argv: string[]): string[] {
   if (!sender) return argv;
   // Always host-qualify so the recipient sees a reply-able `host:name` (matching
   // the outbox path). hostAlias when set, else this machine's short hostname.
-  const alias = loadConfig().hostAlias || shortHost(hostname());
-  return [...argv, "--from", `${alias}:${sender}`];
+  return [...argv, "--from", `${localHostIdentity()}:${sender}`];
 }
 
 // Swap the target ref for its resolved remote name — but only the FIRST

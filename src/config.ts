@@ -1,6 +1,17 @@
 import { existsSync, readFileSync } from "node:fs";
+import { hostname } from "node:os";
 import { configFile } from "./paths";
 import type { Provider } from "./state";
+
+export function shortHost(host: string): string {
+  return host.split(".")[0] || host;
+}
+
+// What the rest of the fleet (and the operator) calls THIS machine: the
+// configured alias when set, else the short hostname.
+export function localHostIdentity(): string {
+  return loadConfig().hostAlias || shortHost(hostname());
+}
 
 export interface Config {
   // Provider a new agent runs on when neither --codex nor --claude is given
