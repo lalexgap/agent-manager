@@ -8,23 +8,16 @@ import { chooseOpener } from "./click";
 import { relativeTime } from "./ls";
 import { artifactCopyPath, latestArtifacts, readManifest } from "./share";
 
-// Operator side of shared artifacts: `am files` lists what agents have
-// published (merging local rows with `am files --json --local-only` over ssh
-// per config.remotes, the fleet pattern), and `am open` pulls one down and
-// opens it. Remotes report their own absolute paths, so a remote
-// AGENTMGR_HOME override is respected — nothing reconstructs ~/.agent-manager
-// on the far side.
-
 export interface FileRow {
   agent: string;
   name: string;
-  path: string; // absolute, on `host` (or this machine when host is unset)
+  path: string;
   size: number;
   mtimeMs: number;
   at: string;
   message?: string;
   origPath?: string;
-  host?: string; // ssh alias, tagged laptop-side; undefined = local
+  host?: string;
 }
 
 export function localArtifactRows(): FileRow[] {
@@ -55,9 +48,6 @@ function parseRemoteRows(host: string, stdout: string): FileRow[] {
   }
 }
 
-// Local rows + per-remote fan-out. An unreachable host (or one running an am
-// too old to know `files`) is warned about, never fatal — same contract as
-// fleetRows.
 async function gatherRows(localOnly: boolean): Promise<FileRow[]> {
   const rows = localArtifactRows();
   if (localOnly) return rows;
@@ -76,8 +66,6 @@ async function gatherRows(localOnly: boolean): Promise<FileRow[]> {
   return rows;
 }
 
-// The exact→prefix→ambiguous ladder used everywhere agents are addressed
-// (resolveFileTarget, maybeForwardToFleet), over artifact owners.
 export function filterByAgent(rows: FileRow[], ref: string): FileRow[] {
   const label = (r: FileRow) => (r.host ? `${r.host}:${r.agent}` : r.agent);
   const owners = (matched: FileRow[]) => [...new Set(matched.map(label))];
@@ -98,9 +86,6 @@ function newestFirst(rows: FileRow[]): FileRow[] {
   return [...rows].sort((a, b) => b.mtimeMs - a.mtimeMs);
 }
 
-// Pick one artifact from an agent's rows: newest by default, `n` = nth newest
-// (1-based, matching the numbering `am files` prints), else a name / unique
-// substring.
 export function resolveArtifact(rows: FileRow[], selector?: string): FileRow {
   const ordered = newestFirst(rows);
   if (!selector) return ordered[0]!;
@@ -151,9 +136,6 @@ export async function filesCommand(agent: string | undefined, opts: { json: bool
   console.log("\nopen one with `am open <agent> [n|name]`");
 }
 
-// Freshness check for the pull cache: the manifest row carries the shared
-// copy's size and mtime, and scp -p preserves both, so a matching cached file
-// is the same bytes. Pure for testing.
 export function cacheIsFresh(row: FileRow, cached: { size: number; mtimeMs: number } | null): boolean {
   return !!cached && cached.size === row.size && cached.mtimeMs >= row.mtimeMs;
 }

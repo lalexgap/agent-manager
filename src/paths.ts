@@ -75,9 +75,6 @@ export function inboxDir(name: string): string {
   return join(inboxRootDir(), name);
 }
 
-// Shared artifacts (am share): files an agent publishes for the operator.
-// Copies live under <owner>/files/ next to a manifest.jsonl, so a shared
-// screenshot survives its worktree being cleaned up.
 export function sharedRootDir(): string {
   return join(baseDir(), "shared");
 }
@@ -86,7 +83,6 @@ export function sharedDir(name: string): string {
   return join(sharedRootDir(), name);
 }
 
-// Where `am open` parks artifacts pulled from remote hosts.
 export function artifactsCacheDir(): string {
   return join(baseDir(), "artifacts-cache");
 }

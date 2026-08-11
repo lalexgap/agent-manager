@@ -121,8 +121,7 @@ function orphanScan(
     }
   }
 
-  // Shared artifacts follow the inbox rule; the "operator" bucket has no
-  // agent behind it by design and is never swept.
+  // The operator bucket has no agent state and must never be swept.
   if (existsSync(sharedRootDir())) {
     for (const name of readdirSync(sharedRootDir())) {
       if (name === "operator" || liveNames.has(name) || restorableNames.has(name)) continue;

@@ -580,9 +580,6 @@ async function main(): Promise<void> {
         });
       }
       break;
-    // share runs where the file is (bytes are local — the send --file
-    // rationale); files/open aggregate from the operator's machine. None are
-    // in AGENT_COMMANDS, so an explicit `am -H host share …` still forwards.
     case "share":
       await shareCommand(requirePositional(args, 0, "file path"), args.positional.slice(1).join(" ") || undefined, {
         from: args.flags.from as string | undefined,
