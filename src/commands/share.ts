@@ -53,6 +53,9 @@ export async function shareCommand(filePath: string, message: string | undefined
   }
 
   const owner = resolveSender(opts.from) ?? "operator";
+  if (!/^[a-zA-Z0-9_-]+$/.test(owner)) {
+    throw new Error("artifact owner must be alphanumeric with dashes/underscores");
+  }
   const name = basename(src);
   const dest = artifactCopyPath(owner, name);
   mkdirSync(join(sharedDir(owner), "files"), { recursive: true });

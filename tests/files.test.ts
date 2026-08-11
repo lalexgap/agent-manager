@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { tmpdir } from "node:os";
-import { cacheIsFresh, filterByAgent, localArtifactRows, resolveArtifact, type FileRow } from "../src/commands/files";
+import { cacheIsFresh, filterByAgent, localArtifactRows, resolveArtifact, stampCacheMtime, type FileRow } from "../src/commands/files";
 import { shareCommand } from "../src/commands/share";
 
 let home: string;
@@ -58,15 +58,22 @@ describe("localArtifactRows", () => {
 });
 
 describe("filterByAgent", () => {
-  test("exact match, then unique prefix", () => {
+  test("exact match, then unique prefix, with local owners winning", () => {
     const rows = [row("web", "a.png"), row("web-old", "b.png")];
     expect(filterByAgent(rows, "web").map((r) => r.name)).toEqual(["a.png"]);
     expect(filterByAgent([row("worker", "c.png")], "wor").map((r) => r.name)).toEqual(["c.png"]);
+    expect(filterByAgent([row("web", "local.png"), row("web", "remote.png", { host: "gapserver" })], "web").map((r) => r.name)).toEqual(["local.png"]);
   });
 
-  test("ambiguity across hosts names the candidates", () => {
-    const rows = [row("web", "a.png"), row("web", "b.png", { host: "gapserver" })];
-    expect(() => filterByAgent(rows, "web")).toThrow(/ambiguous across hosts: web, gapserver:web/);
+  test("host-qualified refs select one remote owner", () => {
+    const rows = [row("web", "local.png"), row("web", "remote.png", { host: "gapserver" })];
+    expect(filterByAgent(rows, "gapserver:web").map((r) => r.name)).toEqual(["remote.png"]);
+    expect(filterByAgent([row("worker", "remote.png", { host: "gapserver" })], "gapserver:wor").map((r) => r.name)).toEqual(["remote.png"]);
+  });
+
+  test("ambiguity across remote hosts names the candidates", () => {
+    const rows = [row("web", "a.png", { host: "laptop" }), row("web", "b.png", { host: "gapserver" })];
+    expect(() => filterByAgent(rows, "web")).toThrow(/ambiguous across hosts: laptop:web, gapserver:web/);
   });
 
   test("unknown agent errors, pointing at am files", () => {
@@ -104,7 +111,18 @@ describe("cacheIsFresh", () => {
   test("fresh only when size matches and the cached mtime is not older", () => {
     expect(cacheIsFresh(remote, null)).toBe(false);
     expect(cacheIsFresh(remote, { size: 10, mtimeMs: 2000 })).toBe(true);
-    expect(cacheIsFresh(remote, { size: 10, mtimeMs: 1000 })).toBe(false); // re-shared since
-    expect(cacheIsFresh(remote, { size: 9, mtimeMs: 2000 })).toBe(false); // different bytes
+    expect(cacheIsFresh(remote, { size: 10, mtimeMs: 1000 })).toBe(false);
+    expect(cacheIsFresh(remote, { size: 9, mtimeMs: 2000 })).toBe(false);
+  });
+
+  test("stamps a rounded transfer time to the manifest mtime", () => {
+    const path = join(work, "cached.png");
+    writeFileSync(path, "0123456789");
+    utimesSync(path, 2, 2);
+    const row = { ...remote, mtimeMs: 2123.456 };
+
+    expect(cacheIsFresh(row, statSync(path))).toBe(false);
+    stampCacheMtime(path, row.mtimeMs);
+    expect(cacheIsFresh(row, statSync(path))).toBe(true);
   });
 });

@@ -1,7 +1,8 @@
-import { existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, statSync, utimesSync } from "node:fs";
 import { join } from "node:path";
 import { artifactsCacheDir, sharedRootDir } from "../paths";
 import { loadConfig } from "../config";
+import { splitAddr } from "../comms";
 import { runAsync, sshAmAsync } from "../remote";
 import { shQuote } from "../tmux";
 import { chooseOpener } from "./click";
@@ -68,16 +69,29 @@ async function gatherRows(localOnly: boolean): Promise<FileRow[]> {
 
 export function filterByAgent(rows: FileRow[], ref: string): FileRow[] {
   const label = (r: FileRow) => (r.host ? `${r.host}:${r.agent}` : r.agent);
-  const owners = (matched: FileRow[]) => [...new Set(matched.map(label))];
-  const exact = rows.filter((r) => r.agent === ref);
-  if (owners(exact).length === 1) return exact;
-  if (owners(exact).length > 1) {
-    throw new Error(`"${ref}" is ambiguous across hosts: ${owners(exact).join(", ")}`);
-  }
-  const prefix = rows.filter((r) => r.agent.startsWith(ref));
-  if (owners(prefix).length === 1) return prefix;
-  if (owners(prefix).length > 1) {
-    throw new Error(`"${ref}" is ambiguous across hosts: ${owners(prefix).join(", ")}`);
+  const match = (candidates: FileRow[], name: string): { rows: FileRow[]; owners: string[] } => {
+    const exact = candidates.filter((r) => r.agent === name);
+    const matched = exact.length > 0 ? exact : candidates.filter((r) => r.agent.startsWith(name));
+    return { rows: matched, owners: [...new Set(matched.map(label))] };
+  };
+  const choose = (matched: { rows: FileRow[]; owners: string[] }, acrossHosts: boolean): FileRow[] | null => {
+    if (matched.owners.length === 1) return matched.rows;
+    if (matched.owners.length > 1) {
+      const scope = acrossHosts ? " across hosts" : "";
+      throw new Error(`"${ref}" is ambiguous${scope}: ${matched.owners.join(", ")}`);
+    }
+    return null;
+  };
+
+  const { host, name } = splitAddr(ref);
+  if (host) {
+    const explicit = choose(match(rows.filter((r) => r.host === host), name), false);
+    if (explicit) return explicit;
+  } else {
+    const local = choose(match(rows.filter((r) => !r.host), name), false);
+    if (local) return local;
+    const remote = choose(match(rows.filter((r) => r.host), name), true);
+    if (remote) return remote;
   }
   throw new Error(`no shared artifacts from "${ref}" — see \`am files\``);
 }
@@ -140,6 +154,11 @@ export function cacheIsFresh(row: FileRow, cached: { size: number; mtimeMs: numb
   return !!cached && cached.size === row.size && cached.mtimeMs >= row.mtimeMs;
 }
 
+export function stampCacheMtime(path: string, mtimeMs: number): void {
+  const seconds = mtimeMs / 1000;
+  utimesSync(path, seconds, seconds);
+}
+
 export async function openCommand(agentRef: string, selector: string | undefined): Promise<void> {
   const rows = filterByAgent(await gatherRows(false), agentRef);
   const row = resolveArtifact(rows, selector);
@@ -151,13 +170,12 @@ export async function openCommand(agentRef: string, selector: string | undefined
     try {
       const stat = statSync(path);
       cached = { size: stat.size, mtimeMs: stat.mtimeMs };
-    } catch {
-      // not cached yet
-    }
+    } catch {}
     if (!cacheIsFresh(row, cached)) {
       mkdirSync(join(artifactsCacheDir(), row.host, row.agent), { recursive: true });
       const scp = await runAsync(["scp", "-p", "-q", `${row.host}:${shQuote(row.path)}`, path], { timeoutMs: 120_000 });
       if (scp.exitCode !== 0) throw new Error(`pull from ${row.host} failed: ${scp.stderr.trim()}`);
+      stampCacheMtime(path, row.mtimeMs);
     }
   }
 

@@ -106,4 +106,12 @@ describe("shareCommand", () => {
     await expect(shareCommand(big, undefined)).rejects.toThrow(/too large/);
     expect(existsSync(sharedDir("operator"))).toBe(false);
   });
+
+  test("rejects an explicit owner that could escape the shared root", async () => {
+    const src = join(work, "notes.md");
+    writeFileSync(src, "notes");
+
+    await expect(shareCommand(src, undefined, { from: "../escape" })).rejects.toThrow(/artifact owner/);
+    expect(existsSync(join(home, "escape"))).toBe(false);
+  });
 });
