@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { inboxDir } from "../src/paths";
+import { inboxDir, sharedDir } from "../src/paths";
 import { queueAppend, queueList } from "../src/queue";
 import { readSnapshot, writeSnapshot } from "../src/snapshots";
 import { readAgent, readLastAttached, recordAttached, resolveAgent, writeAgent, type AgentState } from "../src/state";
@@ -49,6 +49,8 @@ describe("renameAgent", () => {
     writeSnapshot("alpha", ["last screen"]);
     mkdirSync(inboxDir("alpha"), { recursive: true });
     writeFileSync(join(inboxDir("alpha"), "brief.txt"), "hello");
+    mkdirSync(join(sharedDir("alpha"), "files"), { recursive: true });
+    writeFileSync(join(sharedDir("alpha"), "files", "shot.png"), "pixels");
     recordAttached("lead");
     recordAttached("alpha");
 
@@ -74,9 +76,19 @@ describe("renameAgent", () => {
     expect(readSnapshot("alpha")).toBeNull();
     expect(existsSync(join(inboxDir("omega"), "brief.txt"))).toBe(true);
     expect(existsSync(inboxDir("alpha"))).toBe(false);
+    expect(existsSync(join(sharedDir("omega"), "files", "shot.png"))).toBe(true);
+    expect(existsSync(sharedDir("alpha"))).toBe(false);
     expect(readAgent("lead")?.reportTo).toBe("omega");
     expect(readAgent("child")?.spawnedBy).toBe("omega");
     expect(readLastAttached().current).toBe("omega");
+  });
+
+  test("refuses a name whose shared-artifact storage already exists", async () => {
+    writeAgent(agent("alpha"));
+    mkdirSync(sharedDir("omega"), { recursive: true });
+
+    await expect(renameAgent("alpha", "omega")).rejects.toThrow(/shared-artifact storage already exists/);
+    expect(readAgent("alpha")?.name).toBe("alpha");
   });
 
   test("refuses a name owned by another agent or one of its aliases", async () => {

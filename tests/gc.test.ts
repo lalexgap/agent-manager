@@ -195,6 +195,24 @@ describe("planGc orphans", () => {
     expect(plan.orphans).toEqual([]);
   });
 
+  test("shared artifacts follow the inbox rule; the operator bucket is never swept", () => {
+    writeAgent(makeAgent("alive"));
+    trashState(makeAgent("resting"));
+    for (const name of ["alive", "resting", "ghost", "operator"]) {
+      mkdirSync(join(home, "shared", name), { recursive: true });
+      backdateMtime(join(home, "shared", name), 2);
+    }
+
+    const plan = planGc(RETENTION);
+    expect(plan.orphans).toEqual([
+      { kind: "shared", path: join(home, "shared", "ghost"), owner: "ghost" },
+    ]);
+
+    applyGc(plan);
+    expect(existsSync(join(home, "shared", "ghost"))).toBe(false);
+    expect(existsSync(join(home, "shared", "operator"))).toBe(true);
+  });
+
   test("collects old unparseable trash snapshots (invisible to the normal purge)", () => {
     mkdirSync(join(home, "trash"), { recursive: true });
     const torn = join(home, "trash", "torn.json");

@@ -109,6 +109,19 @@ am queue worker                                # inspect pending messages
 
 Messages sent from one managed agent to another are automatically attributed, including across machines. File handoffs land in `~/.agent-manager/inbox/<name>/`. A per-pair rate limit prevents runaway agent loops.
 
+### Shared artifacts (screenshots, reports)
+
+An agent on a server has no way to show you a file — its paths only resolve there. `am share` publishes the file for the operator instead:
+
+```sh
+am share ./screenshot.png "login page after the fix"   # run by the agent (any host)
+am files                       # laptop: list shared artifacts across the fleet
+am open web-fix                # pull that agent's newest artifact here and open it
+am open web-fix 2              # ...or the 2nd newest / `am open web-fix login` by name
+```
+
+Shared files are copied to `~/.agent-manager/shared/<agent>/` on the agent's host (so they outlive the worktree), and `am open` pulls them over ssh into `~/.agent-manager/artifacts-cache/` locally. Sharing fires a notification — set `config.notifyCommand` (e.g. a curl to ntfy.sh) on the server so shares from headless hosts reach you.
+
 ### Preserve and hand off work
 
 ```sh

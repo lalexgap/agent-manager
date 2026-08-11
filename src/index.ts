@@ -9,6 +9,8 @@ import { lsCommand, displayStatus, relativeTime, shortenHome, STATUS_ICONS } fro
 import { sendCommand, interruptCommand } from "./commands/send";
 import { reportCommand } from "./commands/report";
 import { sendFileCommand } from "./commands/sendfile";
+import { shareCommand } from "./commands/share";
+import { filesCommand, openCommand } from "./commands/files";
 import { commsCommand } from "./commands/comms";
 import { renameCommand } from "./commands/rename";
 import { outboxAckCommand, outboxClaimCommand, outboxCommand, outboxTakeCommand } from "./commands/outbox";
@@ -109,6 +111,13 @@ usage:
   am send <name> [msg] --file <path>
                               hand a file to the agent (works across machines):
                               lands in its inbox, with a note pointing at it
+  am share <file> [msg...]    publish a file (screenshot, report) as a shared
+                              artifact: copied out of the worktree, operator
+                              notified — meant for agents on a server whose
+                              operator is elsewhere
+  am files [<agent>] [--json] list shared artifacts across the fleet
+  am open <agent> [n|name]    pull that agent's latest (or nth/named) shared
+                              artifact to this machine and open it
   am interrupt <name> <msg>   abort current turn (Esc), then send message
                               (sends from inside an agent are auto-attributed:
                                the recipient sees "[am · from <you>] …")
@@ -570,6 +579,23 @@ async function main(): Promise<void> {
           from: args.flags.from as string | undefined,
         });
       }
+      break;
+    // share runs where the file is (bytes are local — the send --file
+    // rationale); files/open aggregate from the operator's machine. None are
+    // in AGENT_COMMANDS, so an explicit `am -H host share …` still forwards.
+    case "share":
+      await shareCommand(requirePositional(args, 0, "file path"), args.positional.slice(1).join(" ") || undefined, {
+        from: args.flags.from as string | undefined,
+      });
+      break;
+    case "files":
+      await filesCommand(args.positional[0], {
+        json: !!args.flags.json,
+        localOnly: !!args.flags["local-only"],
+      });
+      break;
+    case "open":
+      await openCommand(requirePositional(args, 0, "agent name"), args.positional[1]);
       break;
     case "interrupt":
     case "int":
