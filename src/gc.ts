@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { listAgents, readAgent, type AgentState } from "./state";
 import { listTrashed, removeTrashed, type TrashedState } from "./trash";
 import { hasSession } from "./tmux";
-import { agentsDir, inboxRootDir, queueDir, trashDir, worktreesDir } from "./paths";
+import { agentsDir, inboxRootDir, queueDir, sharedRootDir, trashDir, worktreesDir } from "./paths";
 import { queueEntryOwner } from "./queue";
 import { listSnapshots } from "./snapshots";
 import { readJsonOrNull } from "./fsutil";
@@ -32,7 +32,7 @@ export interface GcOptions {
 }
 
 export interface OrphanCandidate {
-  kind: "queue" | "inbox" | "snapshot" | "corrupt-state";
+  kind: "queue" | "inbox" | "shared" | "snapshot" | "corrupt-state";
   path: string;
   // The agent name this file would belong to — re-checked at apply time so a
   // name that got (re)registered since planning is left alone.
@@ -118,6 +118,15 @@ function orphanScan(
       if (liveNames.has(name) || restorableNames.has(name)) continue;
       const path = join(inboxRootDir(), name);
       if (olderThan(path, ORPHAN_GRACE_MS, now)) orphans.push({ kind: "inbox", path, owner: name });
+    }
+  }
+
+  // The operator bucket has no agent state and must never be swept.
+  if (existsSync(sharedRootDir())) {
+    for (const name of readdirSync(sharedRootDir())) {
+      if (name === "operator" || liveNames.has(name) || restorableNames.has(name)) continue;
+      const path = join(sharedRootDir(), name);
+      if (olderThan(path, ORPHAN_GRACE_MS, now)) orphans.push({ kind: "shared", path, owner: name });
     }
   }
 

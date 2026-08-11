@@ -8,7 +8,7 @@ import { matchAgent } from "./state";
 // Built on top of the existing queue/deliver path — nothing here moves bytes,
 // it only decides what gets stamped onto a message and whether it's allowed.
 
-export type CommsKind = "send" | "now" | "interrupt" | "report";
+export type CommsKind = "send" | "now" | "interrupt" | "report" | "share";
 
 export interface CommsEntry {
   at: string;

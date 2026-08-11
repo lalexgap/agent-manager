@@ -75,6 +75,18 @@ export function inboxDir(name: string): string {
   return join(inboxRootDir(), name);
 }
 
+export function sharedRootDir(): string {
+  return join(baseDir(), "shared");
+}
+
+export function sharedDir(name: string): string {
+  return join(sharedRootDir(), name);
+}
+
+export function artifactsCacheDir(): string {
+  return join(baseDir(), "artifacts-cache");
+}
+
 // Store-and-forward for sends whose target can't be reached from here (the
 // reverse direction: a roaming laptop unreachable from the server). One JSONL
 // per target name; a collector with that name local sweeps and removes them.
