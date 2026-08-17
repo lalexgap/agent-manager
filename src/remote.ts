@@ -1,5 +1,5 @@
 import { homedir } from "node:os";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, renameSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { shQuote } from "./tmux";
 
@@ -92,6 +92,18 @@ export function sshAm(
   };
 }
 
+// A killed-on-timeout process reports 124, like coreutils `timeout`.
+function killAfter(proc: { kill: () => void }, timeoutMs?: number) {
+  const state = { timedOut: false };
+  const timer = timeoutMs
+    ? setTimeout(() => {
+        state.timedOut = true;
+        proc.kill();
+      }, timeoutMs)
+    : undefined;
+  return { state, settle: () => clearTimeout(timer) };
+}
+
 // Async process runner shared by the non-blocking ssh helpers: the move
 // pipeline runs inside the sidebar's event loop, where a spawnSync would
 // freeze rendering and input for the duration.
@@ -104,20 +116,73 @@ export async function runAsync(
     stdout: "pipe",
     stderr: "pipe",
   });
-  let timedOut = false;
-  const timer = opts.timeoutMs
-    ? setTimeout(() => {
-        timedOut = true;
-        proc.kill();
-      }, opts.timeoutMs)
-    : undefined;
+  const timeout = killAfter(proc, opts.timeoutMs);
   const [stdout, stderr, exitCode] = await Promise.all([
     new Response(proc.stdout).text(),
     new Response(proc.stderr).text(),
     proc.exited,
   ]);
-  clearTimeout(timer);
-  return { exitCode: timedOut ? 124 : exitCode, stdout, stderr };
+  timeout.settle();
+  return { exitCode: timeout.state.timedOut ? 124 : exitCode, stdout, stderr };
+}
+
+// File transfer, deliberately not scp. Since OpenSSH 9.0 scp speaks the SFTP
+// protocol, where the remote path is handed to the far side verbatim instead of
+// to a shell — so a shell-quoted path is looked up with its quotes attached
+// ("scp: '/home/…/theme.png': No such file or directory"), while an unquoted one
+// splits on spaces under the older scp protocol. `cat` over ssh always goes
+// through the remote shell, so shQuote is correct on every OpenSSH; it also
+// rides the multiplexed connection (scp opens its own), and mtimes here are
+// stamped from the manifest rather than copied, so scp -p buys nothing.
+
+// Pull a remote file, writing it to destPath only once the whole byte stream
+// arrives — a truncated pull must never masquerade as a cached artifact.
+export async function sshPullFile(
+  host: string,
+  remotePath: string,
+  destPath: string,
+  opts: { timeoutMs?: number } = {},
+): Promise<SshResult> {
+  const partial = `${destPath}.part`;
+  // Bytes land in the file directly: piping them through a Response never
+  // settles under Bun, and a string round-trip would corrupt binaries.
+  const proc = Bun.spawn(["ssh", ...muxOpts(), host, "--", `cat -- ${shQuote(remotePath)}`], {
+    stdin: "ignore",
+    stdout: Bun.file(partial),
+    stderr: "pipe",
+  });
+  const timeout = killAfter(proc, opts.timeoutMs);
+  const [stderr, exitCode] = await Promise.all([new Response(proc.stderr).text(), proc.exited]);
+  timeout.settle();
+  const code = timeout.state.timedOut ? 124 : exitCode;
+  if (code === 0) {
+    renameSync(partial, destPath);
+  } else {
+    rmSync(partial, { force: true });
+  }
+  return { exitCode: code, stdout: "", stderr };
+}
+
+// Push a local file to an absolute remote path (its directory must exist).
+export async function sshPushFile(
+  host: string,
+  srcPath: string,
+  remotePath: string,
+  opts: { timeoutMs?: number } = {},
+): Promise<SshResult> {
+  const proc = Bun.spawn(["ssh", ...muxOpts(), host, "--", `cat > ${shQuote(remotePath)}`], {
+    stdin: Bun.file(srcPath),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const timeout = killAfter(proc, opts.timeoutMs);
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
+  timeout.settle();
+  return { exitCode: timeout.state.timedOut ? 124 : exitCode, stdout, stderr };
 }
 
 // Same as sshAm, asynchronously — for the picker's background fleet refresh
