@@ -127,6 +127,7 @@ describe("validateSelection", () => {
     models: [{ id: "opus", efforts: [] }],
     efforts: ["low", "medium", "high", "xhigh", "max"],
     modelsExhaustive: false,
+    effortsExhaustive: true,
   };
 
   test("accepts a valid pair", () => {
@@ -152,6 +153,17 @@ describe("validateSelection", () => {
 
   test("no catalog means no complaints", () => {
     expect(validateSelection(null, { model: "whatever", effort: "nonsense" })).toEqual([]);
+  });
+
+  test("a guessed effort list warns instead of blocking the spawn", () => {
+    // claude --help changed shape: the levels are a fallback, not the truth.
+    const guessed = providerCatalog("claude", {
+      run: () => ({ exitCode: 0, stdout: "Options:\n  --model <model>  'opus'\n" }),
+    })!;
+    expect(guessed.effortsExhaustive).toBe(false);
+    expect(guessed.efforts).toEqual(["low", "medium", "high"]);
+    const [complaint] = validateSelection(guessed, { effort: "xhigh" });
+    expect(complaint?.fatal).toBe(false);
   });
 });
 
@@ -186,5 +198,13 @@ describe("parseCatalogs", () => {
   test("a catalog without efforts falls back rather than showing an empty cycle", () => {
     const [catalog] = parseCatalogs(JSON.stringify([{ provider: "claude", models: [], efforts: [] }]));
     expect(catalog?.efforts).toEqual(["low", "medium", "high"]);
+    expect(catalog?.effortsExhaustive).toBe(false);
+  });
+
+  test("drops an empty model id (it would shadow the form's default entry)", () => {
+    const [catalog] = parseCatalogs(JSON.stringify([
+      { provider: "codex", models: [{ id: "", label: "bogus" }, { id: "gpt-5.5" }], efforts: ["low"] },
+    ]));
+    expect(catalog?.models.map((m) => m.id)).toEqual(["gpt-5.5"]);
   });
 });

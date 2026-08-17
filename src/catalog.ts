@@ -31,6 +31,10 @@ export interface ProviderCatalog {
   // Claude's model list is best-effort (no catalog command), so an id that
   // isn't in it may still be valid — callers warn instead of rejecting.
   modelsExhaustive: boolean;
+  // False when the effort list is a fallback guess rather than something the
+  // CLI told us (e.g. claude --help changed shape). Guesses must not reject a
+  // level that would have worked.
+  effortsExhaustive: boolean;
 }
 
 // Used when a provider is installed but its probe fails (old CLI, broken
@@ -45,7 +49,9 @@ export type ProbeRunner = (command: string[]) => { exitCode: number; stdout: str
 
 const runProbe: ProbeRunner = (command) => {
   try {
-    const result = Bun.spawnSync(command, { stdout: "pipe", stderr: "pipe" });
+    // The create form probes synchronously on open, so a wedged CLI would
+    // freeze the whole picker — cap it and fall back to the built-in lists.
+    const result = Bun.spawnSync(command, { stdout: "pipe", stderr: "pipe", timeout: 5000 });
     return { exitCode: result.exitCode, stdout: result.stdout.toString() };
   } catch {
     return { exitCode: 1, stdout: "" };
@@ -95,7 +101,13 @@ export function parseCodexCatalog(json: string): ProviderCatalog | null {
   // the catalog introduces them (low → … → ultra).
   const efforts: string[] = [];
   for (const model of models) for (const effort of model.efforts) if (!efforts.includes(effort)) efforts.push(effort);
-  return { provider: "codex", models, efforts: efforts.length ? efforts : FALLBACK_EFFORTS, modelsExhaustive: true };
+  return {
+    provider: "codex",
+    models,
+    efforts: efforts.length ? efforts : FALLBACK_EFFORTS,
+    modelsExhaustive: true,
+    effortsExhaustive: efforts.length > 0,
+  };
 }
 
 // `claude --help` documents the flag's own vocabulary:
@@ -163,6 +175,7 @@ function probeCatalog(provider: Provider, run: ProbeRunner): ProviderCatalog | n
     models,
     efforts: efforts.length ? efforts : FALLBACK_EFFORTS,
     modelsExhaustive: false,
+    effortsExhaustive: efforts.length > 0,
   };
 }
 
@@ -175,8 +188,9 @@ export function providerCatalog(
   opts: { run?: ProbeRunner; refresh?: boolean } = {},
 ): ProviderCatalog | null {
   if (!opts.refresh && !opts.run && cache.has(provider)) return cache.get(provider)!;
-  if (!Bun.which(provider)) {
-    if (!opts.run) cache.set(provider, null);
+  // An injected runner stands in for the CLI (tests), so only gate the real one.
+  if (!opts.run && !Bun.which(provider)) {
+    cache.set(provider, null);
     return null;
   }
   const catalog = probeCatalog(provider, opts.run ?? runProbe);
@@ -215,7 +229,8 @@ export function parseCatalogs(json: string): ProviderCatalog[] {
       provider: entry.provider as Provider,
       models: (Array.isArray(entry.models) ? entry.models : [])
         .filter((model): model is Record<string, unknown> => !!model && typeof model === "object")
-        .filter((model) => typeof model.id === "string")
+        // An empty id is the picker's "provider default" entry, never a model.
+        .filter((model) => typeof model.id === "string" && model.id)
         .map((model): ModelOption => ({
           id: model.id as string,
           ...(typeof model.label === "string" ? { label: model.label } : {}),
@@ -225,8 +240,11 @@ export function parseCatalogs(json: string): ProviderCatalog[] {
         })),
       efforts: (Array.isArray(entry.efforts) ? entry.efforts : []).filter((e): e is string => typeof e === "string"),
       modelsExhaustive: entry.modelsExhaustive === true,
+      effortsExhaustive: entry.effortsExhaustive === true,
     }))
-    .map((catalog) => (catalog.efforts.length ? catalog : { ...catalog, efforts: FALLBACK_EFFORTS }));
+    .map((catalog) => (catalog.efforts.length
+      ? catalog
+      : { ...catalog, efforts: FALLBACK_EFFORTS, effortsExhaustive: false }));
 }
 
 export interface CatalogComplaint {
@@ -258,7 +276,9 @@ export function validateSelection(
       const where = known?.efforts.length ? ` for ${known.id}` : "";
       complaints.push({
         message: `unknown ${catalog.provider} effort "${selection.effort}"${where} — supported: ${efforts.join(", ")}`,
-        fatal: true,
+        // Only reject when the levels came from the CLI itself; a fallback
+        // list must not block a level the provider would have accepted.
+        fatal: catalog.effortsExhaustive,
       });
     }
   }

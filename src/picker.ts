@@ -900,6 +900,19 @@ export function effortOptionsFor(catalogs: ProviderCatalog[], provider: string |
   return ["default", ...effortsForModel(catalog, model || undefined)];
 }
 
+// What the effort strip actually shows. A selected level the current list
+// doesn't contain (its catalog hasn't arrived yet) is appended rather than
+// hidden — the form must never display "default" while holding something else.
+export function effortStripOptions(
+  catalogs: ProviderCatalog[],
+  provider: string | undefined,
+  model: string,
+  effort: string,
+): string[] {
+  const options = effortOptionsFor(catalogs, provider, model);
+  return effort && !options.includes(effort) ? [...options, effort] : options;
+}
+
 // Tab / Shift-Tab / ↑ / ↓ move the focus ring around the form, wrapping.
 export function cycleField(idx: number, count: number, delta: number): number {
   if (count <= 0) return 0;
@@ -953,6 +966,9 @@ export async function pick(
   let newEffort = "";
   let catalogs: ProviderCatalog[] = [];
   let catalogQueryGen = 0;
+  const currentModelOptions = () => modelOptionsFor(catalogs, PROVIDER_OPTIONS[newProviderIdx]);
+  const currentEffortOptions = () =>
+    effortStripOptions(catalogs, PROVIDER_OPTIONS[newProviderIdx], newModel, newEffort);
   const configuredRoles = (host?: string) => typeof handlers.roleOptions === "function" ? handlers.roleOptions(host) : (handlers.roleOptions ?? []);
   let roleOptions: { name: string; description?: string }[] = [
     { name: "", description: "No custom role" },
@@ -1178,11 +1194,13 @@ export async function pick(
         value = newDir + cursor;
         hint = `${THEME.faint}tab complete${rowBase}`;
       } else if (field === "model") {
-        const options = modelOptionsFor(catalogs, PROVIDER_OPTIONS[newProviderIdx]);
+        const options = currentModelOptions();
         const selected = options.find((option) => option.id === newModel);
         value = newModel ? newModel + cursor : `${THEME.muted}default${rowBase}${cursor}`;
-        const note = selected?.description ?? selected?.label ?? (newModel ? "not in this machine's list" : "");
-        const detail = options.length > 1 ? (note || "← → choose · or type") : note;
+        const note = selected
+          ? (selected.description ?? "")
+          : (newModel ? "not in this machine's list" : "");
+        const detail = note || (options.length > 1 ? "← → choose · or type" : "");
         const short = detail.length > 34 ? `${detail.slice(0, 33)}…` : detail;
         hint = short ? `${THEME.faint}${short}${rowBase}` : "";
       } else if (field === "provider") {
@@ -1192,7 +1210,7 @@ export async function pick(
         value = `${THEME.muted}‹${rowBase} ${THEME.cyan}${selectedRole.name || "none"}${rowBase} ${THEME.muted}›${rowBase}`;
         hint = selectedRole.description ? `${THEME.faint}${selectedRole.description}${rowBase}` : "";
       } else if (field === "effort") {
-        const options = effortOptionsFor(catalogs, PROVIDER_OPTIONS[newProviderIdx], newModel);
+        const options = currentEffortOptions();
         const selected = Math.max(0, options.indexOf(newEffort || "default"));
         value = optionStrip(options, selected, rowBase, field);
       } else {
@@ -1691,7 +1709,9 @@ export async function pick(
           apply(loaded);
           return;
         }
-        apply([]);
+        // Nothing is known about the new host until the round-trip lands —
+        // clear the lists but keep the selection, which its reply may support.
+        catalogs = [];
         loaded.then(
           (result) => {
             if (finished || gen !== catalogQueryGen) return;
@@ -1711,14 +1731,23 @@ export async function pick(
       }
     };
 
-    // Keep the selection legal after the provider, host, or catalog changes:
-    // a model the new provider doesn't list (or an effort that model doesn't
-    // support) falls back to the provider default rather than being sent as-is.
+    // Keep the selection legal after the provider or catalog changes: a model
+    // the new provider doesn't list falls back to the provider default rather
+    // than being sent as-is.
     const reconcileModelEffort = () => {
-      const provider = PROVIDER_OPTIONS[newProviderIdx];
-      const catalog = catalogFor(catalogs, provider);
+      const catalog = catalogFor(catalogs, PROVIDER_OPTIONS[newProviderIdx]);
       if (newModel && catalog?.modelsExhaustive && !findModel(catalog, newModel)) newModel = "";
-      if (newEffort && !effortOptionsFor(catalogs, provider, newModel).includes(newEffort)) newEffort = "";
+      reconcileEffort();
+    };
+
+    // Editing the model narrows the effort list (codex levels are per model),
+    // so drop a level the new model doesn't support — leaving it selected but
+    // undisplayable is how you get an error about a value you never saw.
+    const reconcileEffort = () => {
+      if (!newEffort) return;
+      const catalog = catalogFor(catalogs, PROVIDER_OPTIONS[newProviderIdx]);
+      if (!catalog) return; // catalog unknown: keep what the user picked
+      if (!effortOptionsFor(catalogs, PROVIDER_OPTIONS[newProviderIdx], newModel).includes(newEffort)) newEffort = "";
     };
 
     const submitCreate = () => {
@@ -2291,13 +2320,13 @@ export async function pick(
             newProviderIdx = cycleField(newProviderIdx, PROVIDER_OPTIONS.length, dir);
             reconcileModelEffort();
           } else if (field === "model") {
-            const options = modelOptionsFor(catalogs, PROVIDER_OPTIONS[newProviderIdx]);
+            const options = currentModelOptions();
             const current = options.findIndex((option) => option.id === newModel);
             // A typed-in model isn't in the list: cycling starts from "default".
             newModel = options[cycleField(current < 0 ? 0 : current, options.length, dir)]!.id;
-            reconcileModelEffort();
+            reconcileEffort();
           } else if (field === "effort") {
-            const options = effortOptionsFor(catalogs, PROVIDER_OPTIONS[newProviderIdx], newModel);
+            const options = currentEffortOptions();
             const current = Math.max(0, options.indexOf(newEffort || "default"));
             const next = options[cycleField(current, options.length, dir)]!;
             newEffort = next === "default" ? "" : next;
@@ -2313,7 +2342,10 @@ export async function pick(
             feedback = null;
           }
           else if (field === "task") newTask = newTask.slice(0, -1);
-          else if (field === "model") newModel = newModel.slice(0, -1);
+          else if (field === "model") {
+            newModel = newModel.slice(0, -1);
+            reconcileEffort();
+          }
           else if (field === "dir") {
             newDir = newDir.slice(0, -1);
             formCandidates = [];
@@ -2329,7 +2361,10 @@ export async function pick(
             }
           }
           else if (field === "task") newTask += key;
-          else if (field === "model") newModel += key;
+          else if (field === "model") {
+            newModel += key;
+            reconcileEffort();
+          }
           else if (field === "dir") {
             newDir += key;
             formCandidates = [];

@@ -6,6 +6,7 @@ import {
   editMenuHelp,
   EFFORT_OPTIONS,
   effortOptionsFor,
+  effortStripOptions,
   modelOptionsFor,
   feedbackBanner,
   filterPaletteCommands,
@@ -234,12 +235,14 @@ describe("model and effort options", () => {
       ],
       efforts: ["low", "medium", "high", "ultra"],
       modelsExhaustive: true,
+      effortsExhaustive: true,
     },
     {
       provider: "claude",
       models: [{ id: "opus", efforts: [] }],
       efforts: ["low", "medium", "high", "xhigh", "max"],
       modelsExhaustive: false,
+      effortsExhaustive: true,
     },
   ];
 
@@ -261,6 +264,13 @@ describe("model and effort options", () => {
 
   test("an unreachable catalog leaves the built-in fallback", () => {
     expect(effortOptionsFor([], "claude", "")).toEqual(EFFORT_OPTIONS);
+  });
+
+  test("a selected level the list doesn't contain is shown, not hidden", () => {
+    // Waiting on a remote catalog: the strip still displays what will be sent.
+    expect(effortStripOptions([], "codex", "", "ultra")).toEqual([...EFFORT_OPTIONS, "ultra"]);
+    expect(effortStripOptions(catalogs, "codex", "gpt-5.6-sol", "ultra"))
+      .toEqual(["default", "low", "medium", "high", "ultra"]);
   });
 });
 
