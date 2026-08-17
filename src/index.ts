@@ -47,6 +47,7 @@ import { deliverCommand } from "./deliver";
 import { runForegroundDaemon } from "./daemon";
 import { runTunnel } from "./tunnel";
 import { roleCommand } from "./commands/role";
+import { localCatalogs, modelsCommand } from "./commands/models";
 import { CONCIERGE_ROLE, listRoles } from "./roles";
 
 const HELP = `Agent Motel (am) — rooms for coding agents (Claude Code & Codex)
@@ -99,6 +100,10 @@ usage:
                               Created on first use, revived automatically
                               (press c in the hub; --no-jump queues the
                               question and stays)
+  am models [--json] [--codex|--claude]
+                              models and reasoning-effort levels the installed
+                              providers actually offer (what --model / --effort
+                              accept; -H <host> asks that machine)
   am role list [--json]       list built-in and custom roles
   am role show <name>         print a role's instructions
   am role add <name> -m msg   define a role (-m - or --file for long prompts;
@@ -433,6 +438,7 @@ async function pickerFlow(): Promise<void> {
     defaultProvider: config.defaultProvider,
     worktreeByDefault: config.worktreeByDefault,
     roleOptions: () => listRoles().filter((role) => role.name !== CONCIERGE_ROLE),
+    catalogOptions: () => localCatalogs(),
     // Inside tmux the palette floats over the picker; elsewhere the picker
     // falls back to its own full-screen overlay.
     palettePopup: insideTmux() ? showPalettePopup : undefined,
@@ -548,6 +554,12 @@ async function main(): Promise<void> {
       await conciergeCommand({
         question: args.positional.join(" ") || ((args.flags.m ?? args.flags.message) as string | undefined),
         jump: args.flags["no-jump"] ? false : undefined,
+      });
+      break;
+    case "models":
+      modelsCommand({
+        provider: args.flags.codex ? "codex" : args.flags.claude ? "claude" : undefined,
+        json: !!args.flags.json,
       });
       break;
     case "role":

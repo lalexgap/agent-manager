@@ -4,6 +4,10 @@ import {
   clipAnsi,
   cycleField,
   editMenuHelp,
+  EFFORT_OPTIONS,
+  effortOptionsFor,
+  effortStripOptions,
+  modelOptionsFor,
   feedbackBanner,
   filterPaletteCommands,
   formFields,
@@ -19,6 +23,7 @@ import {
   visibleWidth,
   wrapTokens,
 } from "../src/picker";
+import type { ProviderCatalog } from "../src/catalog";
 
 const GREEN = "\x1b[38;2;158;206;106m";
 const YELLOW_C = "\x1b[38;2;224;175;104m";
@@ -217,6 +222,55 @@ describe("formFields", () => {
     expect(before[5]).toBe("model");
     expect(preservedFieldIndex(before, 5, after)).toBe(6);
     expect(after[preservedFieldIndex(before, 5, after)]).toBe("model");
+  });
+});
+
+describe("model and effort options", () => {
+  const catalogs: ProviderCatalog[] = [
+    {
+      provider: "codex",
+      models: [
+        { id: "gpt-5.6-sol", label: "GPT-5.6-Sol", efforts: ["low", "medium", "high", "ultra"] },
+        { id: "gpt-5.5", label: "GPT-5.5", efforts: ["low", "medium", "high"] },
+      ],
+      efforts: ["low", "medium", "high", "ultra"],
+      modelsExhaustive: true,
+      effortsExhaustive: true,
+    },
+    {
+      provider: "claude",
+      models: [{ id: "opus", efforts: [] }],
+      efforts: ["low", "medium", "high", "xhigh", "max"],
+      modelsExhaustive: false,
+      effortsExhaustive: true,
+    },
+  ];
+
+  test("the model cycle starts on the provider's default", () => {
+    const options = modelOptionsFor(catalogs, "codex");
+    expect(options[0]!.id).toBe("");
+    expect(options.map((o) => o.id)).toEqual(["", "gpt-5.6-sol", "gpt-5.5"]);
+  });
+
+  test("without a catalog the model field offers only the default", () => {
+    expect(modelOptionsFor([], "codex").map((o) => o.id)).toEqual([""]);
+  });
+
+  test("effort options narrow to the selected model", () => {
+    expect(effortOptionsFor(catalogs, "codex", "")).toEqual(["default", "low", "medium", "high", "ultra"]);
+    expect(effortOptionsFor(catalogs, "codex", "gpt-5.5")).toEqual(["default", "low", "medium", "high"]);
+    expect(effortOptionsFor(catalogs, "claude", "opus")).toEqual(["default", "low", "medium", "high", "xhigh", "max"]);
+  });
+
+  test("an unreachable catalog leaves the built-in fallback", () => {
+    expect(effortOptionsFor([], "claude", "")).toEqual(EFFORT_OPTIONS);
+  });
+
+  test("a selected level the list doesn't contain is shown, not hidden", () => {
+    // Waiting on a remote catalog: the strip still displays what will be sent.
+    expect(effortStripOptions([], "codex", "", "ultra")).toEqual([...EFFORT_OPTIONS, "ultra"]);
+    expect(effortStripOptions(catalogs, "codex", "gpt-5.6-sol", "ultra"))
+      .toEqual(["default", "low", "medium", "high", "ultra"]);
   });
 });
 
