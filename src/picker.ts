@@ -1,5 +1,6 @@
 import { completeDir, completeDirRemote } from "./dirComplete";
 import { localAgentMatches, search } from "./search";
+import { effortsForModel, findModel, type ModelOption, type ProviderCatalog } from "./catalog";
 
 export interface PickerItem {
   name: string;
@@ -202,6 +203,11 @@ export interface PickerHandlers {
   worktreeByDefault?: boolean;
   roleOptions?: { name: string; description?: string }[] | ((host?: string) =>
     { name: string; description?: string }[] | Promise<{ name: string; description?: string }[]>);
+  // What the providers on the target machine actually offer, so the create
+  // form's model / effort fields list real choices instead of a guess. Async
+  // for remote hosts (`am models --json` over ssh); absent = fall back to the
+  // built-in EFFORT_OPTIONS and a free-text model.
+  catalogOptions?: (host?: string) => ProviderCatalog[] | Promise<ProviderCatalog[]>;
   // The create flow opens a full-screen form. The sidebar paints only its own
   // ~44-col pane, so the hub zooms that pane (tmux resize-pane -Z) while the
   // form is up and un-zooms when it closes. Called with true on open, false on
@@ -869,7 +875,30 @@ export function preservedFieldIndex(previous: string[], index: number, next: str
 // Provider cycle (mirrors the Where field). The first entry is the default.
 export const PROVIDER_OPTIONS = ["claude", "codex"];
 // Effort cycle; "default" means omit the flag and let the provider decide.
+// Only a fallback now — the real levels come from the target machine's
+// provider catalog (see catalogOptions / `am models`).
 export const EFFORT_OPTIONS = ["default", "low", "medium", "high"];
+// The model cycle's first entry: no --model, the provider's own default.
+export const DEFAULT_MODEL_OPTION: ModelOption = { id: "", label: "default", efforts: [] };
+
+export function catalogFor(catalogs: ProviderCatalog[], provider: string | undefined): ProviderCatalog | null {
+  return catalogs.find((catalog) => catalog.provider === provider) ?? null;
+}
+
+// Model cycle for the selected provider. Without a catalog it's just
+// "default" — the field stays typeable, so an unlisted model is still
+// reachable (Claude's list is not exhaustive).
+export function modelOptionsFor(catalogs: ProviderCatalog[], provider: string | undefined): ModelOption[] {
+  return [DEFAULT_MODEL_OPTION, ...(catalogFor(catalogs, provider)?.models ?? [])];
+}
+
+// Effort cycle for the selected provider AND model: codex varies per model
+// (`ultra` only exists on the newest), so the list narrows as you pick.
+export function effortOptionsFor(catalogs: ProviderCatalog[], provider: string | undefined, model: string): string[] {
+  const catalog = catalogFor(catalogs, provider);
+  if (!catalog) return EFFORT_OPTIONS;
+  return ["default", ...effortsForModel(catalog, model || undefined)];
+}
 
 // Tab / Shift-Tab / ↑ / ↓ move the focus ring around the form, wrapping.
 export function cycleField(idx: number, count: number, delta: number): number {
@@ -913,13 +942,17 @@ export async function pick(
   // The "where" step is only shown when at least one remote is configured.
   const hostOptions = ["local", ...(handlers.remotes ?? [])];
   let newHostIdx = 0;
-  // Provider (Claude/Codex) and reasoning effort cycle like Where; model is
-  // free text (blank = the provider's default model). The initial selection
-  // follows config's defaultProvider so the form opens on the user's default.
+  // Provider (Claude/Codex), model and reasoning effort all cycle like Where.
+  // Model and effort options come from the target machine's provider catalog
+  // (blank model = the provider's default); model stays typeable for names the
+  // catalog doesn't list. The initial selection follows config's
+  // defaultProvider so the form opens on the user's default.
   const defaultProviderIdx = Math.max(0, PROVIDER_OPTIONS.indexOf(handlers.defaultProvider ?? PROVIDER_OPTIONS[0]!));
   let newProviderIdx = defaultProviderIdx;
   let newModel = "";
-  let newEffortIdx = 0;
+  let newEffort = "";
+  let catalogs: ProviderCatalog[] = [];
+  let catalogQueryGen = 0;
   const configuredRoles = (host?: string) => typeof handlers.roleOptions === "function" ? handlers.roleOptions(host) : (handlers.roleOptions ?? []);
   let roleOptions: { name: string; description?: string }[] = [
     { name: "", description: "No custom role" },
@@ -1145,7 +1178,13 @@ export async function pick(
         value = newDir + cursor;
         hint = `${THEME.faint}tab complete${rowBase}`;
       } else if (field === "model") {
+        const options = modelOptionsFor(catalogs, PROVIDER_OPTIONS[newProviderIdx]);
+        const selected = options.find((option) => option.id === newModel);
         value = newModel ? newModel + cursor : `${THEME.muted}default${rowBase}${cursor}`;
+        const note = selected?.description ?? selected?.label ?? (newModel ? "not in this machine's list" : "");
+        const detail = options.length > 1 ? (note || "← → choose · or type") : note;
+        const short = detail.length > 34 ? `${detail.slice(0, 33)}…` : detail;
+        hint = short ? `${THEME.faint}${short}${rowBase}` : "";
       } else if (field === "provider") {
         value = optionStrip(PROVIDER_OPTIONS, newProviderIdx, rowBase, field);
       } else if (field === "role") {
@@ -1153,7 +1192,9 @@ export async function pick(
         value = `${THEME.muted}‹${rowBase} ${THEME.cyan}${selectedRole.name || "none"}${rowBase} ${THEME.muted}›${rowBase}`;
         hint = selectedRole.description ? `${THEME.faint}${selectedRole.description}${rowBase}` : "";
       } else if (field === "effort") {
-        value = optionStrip(EFFORT_OPTIONS, newEffortIdx, rowBase, field);
+        const options = effortOptionsFor(catalogs, PROVIDER_OPTIONS[newProviderIdx], newModel);
+        const selected = Math.max(0, options.indexOf(newEffort || "default"));
+        value = optionStrip(options, selected, rowBase, field);
       } else {
         value = optionStrip(hostOptions, newHostIdx, rowBase, field);
       }
@@ -1580,7 +1621,7 @@ export async function pick(
       newHostIdx = 0;
       newProviderIdx = defaultProviderIdx;
       newModel = "";
-      newEffortIdx = 0;
+      newEffort = "";
       newRoleIdx = 0;
       formIdx = 0;
       formCandidates = [];
@@ -1588,6 +1629,7 @@ export async function pick(
       dirQueryGen++;
       feedback = null;
       refreshRoleOptions();
+      refreshCatalogs();
       setForm(true); // zoom the sidebar pane to full screen
     };
 
@@ -1631,13 +1673,61 @@ export async function pick(
       }
     };
 
+    // Model / effort options for whichever machine the agent will land on.
+    // Remote catalogs arrive over ssh, so a stale reply (host changed while it
+    // was in flight) is dropped by the generation counter; until one lands the
+    // fields simply show the fallbacks.
+    const refreshCatalogs = () => {
+      if (!handlers.catalogOptions) return;
+      const host = hostOptions[newHostIdx] === "local" ? undefined : hostOptions[newHostIdx];
+      const gen = ++catalogQueryGen;
+      const apply = (loaded: ProviderCatalog[]) => {
+        catalogs = loaded;
+        reconcileModelEffort();
+      };
+      try {
+        const loaded = handlers.catalogOptions(host);
+        if (Array.isArray(loaded)) {
+          apply(loaded);
+          return;
+        }
+        apply([]);
+        loaded.then(
+          (result) => {
+            if (finished || gen !== catalogQueryGen) return;
+            apply(result);
+            render();
+          },
+          () => {
+            // A host that can't answer `am models` isn't worth a banner — the
+            // form keeps working with the fallback lists.
+            if (finished || gen !== catalogQueryGen) return;
+            apply([]);
+            render();
+          },
+        );
+      } catch {
+        apply([]);
+      }
+    };
+
+    // Keep the selection legal after the provider, host, or catalog changes:
+    // a model the new provider doesn't list (or an effort that model doesn't
+    // support) falls back to the provider default rather than being sent as-is.
+    const reconcileModelEffort = () => {
+      const provider = PROVIDER_OPTIONS[newProviderIdx];
+      const catalog = catalogFor(catalogs, provider);
+      if (newModel && catalog?.modelsExhaustive && !findModel(catalog, newModel)) newModel = "";
+      if (newEffort && !effortOptionsFor(catalogs, provider, newModel).includes(newEffort)) newEffort = "";
+    };
+
     const submitCreate = () => {
       if (creating || !handlers.create) return;
       creating = true;
       render();
       const host = hostOptions[newHostIdx] === "local" ? undefined : hostOptions[newHostIdx];
       const provider = PROVIDER_OPTIONS[newProviderIdx];
-      const effort = EFFORT_OPTIONS[newEffortIdx] === "default" ? undefined : EFFORT_OPTIONS[newEffortIdx];
+      const effort = newEffort || undefined;
       const role = roleOptions[newRoleIdx]?.name || undefined;
       handlers.create(newName, newTask || undefined, newDir.trim() || undefined, host, provider, newModel.trim() || undefined, effort, role).then(
         (created) => {
@@ -1650,7 +1740,7 @@ export async function pick(
           newHostIdx = 0;
           newProviderIdx = defaultProviderIdx;
           newModel = "";
-          newEffortIdx = 0;
+          newEffort = "";
           newRoleIdx = 0;
           formIdx = 0;
           formCandidates = [];
@@ -2130,7 +2220,7 @@ export async function pick(
           newHostIdx = 0;
           newProviderIdx = defaultProviderIdx;
           newModel = "";
-          newEffortIdx = 0;
+          newEffort = "";
           newRoleIdx = 0;
           formIdx = 0;
           formCandidates = [];
@@ -2197,12 +2287,25 @@ export async function pick(
           // ←/→ cycle the option-strip fields (provider, effort, where);
           // ignored on text fields.
           const dir = key === "\x1b[C" ? 1 : -1;
-          if (field === "provider") newProviderIdx = cycleField(newProviderIdx, PROVIDER_OPTIONS.length, dir);
-          else if (field === "effort") newEffortIdx = cycleField(newEffortIdx, EFFORT_OPTIONS.length, dir);
-          else if (field === "role") newRoleIdx = cycleField(newRoleIdx, roleOptions.length, dir);
+          if (field === "provider") {
+            newProviderIdx = cycleField(newProviderIdx, PROVIDER_OPTIONS.length, dir);
+            reconcileModelEffort();
+          } else if (field === "model") {
+            const options = modelOptionsFor(catalogs, PROVIDER_OPTIONS[newProviderIdx]);
+            const current = options.findIndex((option) => option.id === newModel);
+            // A typed-in model isn't in the list: cycling starts from "default".
+            newModel = options[cycleField(current < 0 ? 0 : current, options.length, dir)]!.id;
+            reconcileModelEffort();
+          } else if (field === "effort") {
+            const options = effortOptionsFor(catalogs, PROVIDER_OPTIONS[newProviderIdx], newModel);
+            const current = Math.max(0, options.indexOf(newEffort || "default"));
+            const next = options[cycleField(current, options.length, dir)]!;
+            newEffort = next === "default" ? "" : next;
+          } else if (field === "role") newRoleIdx = cycleField(newRoleIdx, roleOptions.length, dir);
           else if (field === "where") {
             newHostIdx = cycleField(newHostIdx, hostOptions.length, dir);
             refreshRoleOptions();
+            refreshCatalogs();
           }
         } else if (key === "\x7f" || key === "\b") {
           if (field === "name") {

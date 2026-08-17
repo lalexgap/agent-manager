@@ -18,6 +18,7 @@ import { reviveAgent } from "./resume";
 import { readLastAttached } from "../state";
 import { ensureDaemon, watchDaemonEvents } from "../daemon";
 import { CONCIERGE_ROLE, listRoles } from "../roles";
+import { catalogsForHost } from "./models";
 
 // Persistent split view: a hub tmux session whose left pane runs the sidebar
 // (`am __sidebar`) and whose right pane shows the selected agent via a nested
@@ -472,6 +473,7 @@ export async function sidebarCommand(): Promise<void> {
     defaultProvider: config.defaultProvider,
     worktreeByDefault: config.worktreeByDefault,
     roleOptions: (host) => roleOptionsForHost(host),
+    catalogOptions: (host) => catalogsForHost(host),
 
     quit: () => {
       tmux("detach-client", "-s", `=${HUB_SESSION}`);

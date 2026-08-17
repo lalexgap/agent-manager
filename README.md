@@ -64,6 +64,17 @@ am peek <name>                          # print the current screen
 
 In the hub, use `↑`/`↓` or `j`/`k` to select an agent, `Enter` or `→` to control it, `ctrl-q` to return to the sidebar, `ctrl-n` to create an agent, `r` to filter by role, `s` to cycle status/recent/role sorting, and `Esc` to detach. Inside an attached session, `ctrl-q` returns to the hub without stopping the agent.
 
+### Models and reasoning effort
+
+```sh
+am models                               # what claude and codex offer here
+am models --json --codex                # machine-readable, one provider
+am -H server models                     # ask another machine
+am new deep-dive --codex --model gpt-5.6-sol --effort ultra
+```
+
+Model and effort options come from the installed CLIs rather than a hardcoded list: codex reports its own catalog (including which reasoning levels each model supports — `ultra` exists only on the newest), and claude's levels are read from its `--help`, so new ones appear as soon as you upgrade. The hub's create form cycles the real options with `←`/`→` — for the machine the agent will run on, so a remote host's catalog is used when you pick it as the location — and the model field still accepts a typed name. `am new` / `am run` reject a `--model` or `--effort` the provider can't accept instead of spawning a session that dies on startup; claude's model list isn't exhaustive, so an unrecognized model there is only a warning.
+
 ### Fleet concierge
 
 ```sh

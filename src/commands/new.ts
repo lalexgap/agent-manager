@@ -16,6 +16,7 @@ import {
 } from "../providers";
 import { ensureCodexHooks } from "../codexHooks";
 import { CONCIERGE_ROLE, requireRole } from "../roles";
+import { providerCatalog, validateSelection } from "../catalog";
 
 // These grew provider-awareness and moved to providers.ts; re-exported so
 // existing imports keep working.
@@ -124,6 +125,15 @@ export async function newCommand(opts: NewOptions): Promise<void> {
   // without the other provider installed.
   if (!Bun.which(provider)) {
     throw new Error(`${provider} is not installed on this machine — install it or pick the other provider (--to)`);
+  }
+  // A bogus --model/--effort otherwise reaches the provider as a flag it
+  // rejects, and the session dies before anyone sees the message.
+  if (opts.model || opts.effort) {
+    const complaints = validateSelection(providerCatalog(provider), { model: opts.model, effort: opts.effort });
+    for (const complaint of complaints) {
+      if (complaint.fatal) throw new Error(`${complaint.message} (see \`am models\`)`);
+      if (!opts.quiet) console.error(`warning: ${complaint.message}`);
+    }
   }
 
   ensureDirs();
