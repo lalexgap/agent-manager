@@ -2,7 +2,7 @@ import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync, s
 import { homedir, platform } from "node:os";
 import { join } from "node:path";
 import { codexHome } from "./codexHooks";
-import { loadConfig } from "./config";
+import { loadConfig, localHostIdentity } from "./config";
 
 // Quota headroom for the whole fleet, the same numbers `/usage` shows inside
 // Claude Code and `/status` shows inside Codex — read WITHOUT touching any
@@ -128,8 +128,28 @@ export function parseClaudeUsage(payload: unknown, plan?: string): ProviderUsage
   return usage;
 }
 
+// How long to wait before re-reading credentials that gave us nothing usable.
+const OAUTH_RETRY_MS = 5 * 60_000;
+let oauthCache: { value: ClaudeOAuth | null; readAt: number } | null = null;
+
+// On macOS the credentials live in the login keychain, so claudeOAuth() spawns
+// `security` synchronously — on the UI's event loop, once per poll, with a
+// modal prompt possible if the keychain ACL doesn't trust it. A token good for
+// hours is read once; anything unusable is retried on a slow timer instead.
+function cachedClaudeOAuth(): ClaudeOAuth | null {
+  const cached = oauthCache;
+  if (cached) {
+    const expiresAt = cached.value?.expiresAt;
+    if (expiresAt && expiresAt > Date.now()) return cached.value;
+    if (Date.now() - cached.readAt < OAUTH_RETRY_MS) return cached.value;
+  }
+  const value = claudeOAuth();
+  oauthCache = { value, readAt: Date.now() };
+  return value;
+}
+
 export async function fetchClaudeUsage(): Promise<ProviderUsage> {
-  const auth = claudeOAuth();
+  const auth = cachedClaudeOAuth();
   if (!auth?.accessToken) {
     return { provider: "claude", windows: [], error: "not signed in (run `claude` to authenticate)" };
   }
@@ -241,8 +261,10 @@ export function readCodexUsage(): ProviderUsage {
   let newest: CodexSnapshot | null = null;
   for (const file of codexSessionFiles()) {
     const tail = readTail(file, CODEX_TAIL_BYTES);
-    // Walk backwards: the last snapshot in a log wins, and stopping there
-    // avoids parsing every line of the tail.
+    // Walk backwards: the last usable snapshot in a log wins, and stopping
+    // there avoids parsing every line of the tail. Codex also emits
+    // token_count events carrying `"rate_limits":null`, so a line mentioning
+    // rate_limits isn't necessarily a reading — keep going until one is.
     const lines = tail.split("\n");
     for (let i = lines.length - 1; i >= 0; i--) {
       const line = lines[i]!;
@@ -258,7 +280,8 @@ export function readCodexUsage(): ProviderUsage {
         entry?.payload?.info?.rate_limits ?? entry?.payload?.rate_limits ?? entry?.rate_limits,
         typeof entry?.timestamp === "string" ? entry.timestamp : new Date(statSync(file).mtimeMs).toISOString(),
       );
-      if (snapshot && (!newest || snapshot.observedAt > newest.observedAt)) newest = snapshot;
+      if (!snapshot) continue;
+      if (!newest || snapshot.observedAt > newest.observedAt) newest = snapshot;
       break;
     }
   }
@@ -279,7 +302,9 @@ export async function collectUsage(opts: { providers?: UsageProvider[] } = {}): 
   const claude = wanted.includes("claude") ? fetchClaudeUsage() : null;
   if (claude) providers.push(await claude);
   if (wanted.includes("codex")) providers.push(readCodexUsage());
-  return { generatedAt: new Date().toISOString(), providers };
+  // Named so a reading collected over ssh (`am -H laptop usage --json`) says
+  // whose machine it describes — codex freshness is per-host.
+  return { generatedAt: new Date().toISOString(), host: localHostIdentity(), providers };
 }
 
 export function observationAgeSeconds(usage: ProviderUsage, now: Date = new Date()): number | null {
@@ -381,24 +406,47 @@ export function usageBadge(): string | null {
   return badgeCache;
 }
 
+// Ceiling for the backoff below: a hub left open for days against a provider
+// that keeps failing settles here rather than asking every minute forever.
+const BADGE_MAX_REFRESH_MS = 15 * 60_000;
+
+// Poll delay after `failures` consecutive empty readings — offline, throttled,
+// or simply not signed in all look the same from here, and all deserve to be
+// asked about less often.
+export function usagePollDelay(failures: number): number {
+  if (failures <= 0) return BADGE_REFRESH_MS;
+  return Math.min(BADGE_REFRESH_MS * 2 ** failures, BADGE_MAX_REFRESH_MS);
+}
+
 // Started by the UI for as long as it's on screen; returns its own stopper.
 // Nothing polls unless something is watching.
 export function startUsagePolling(): () => void {
   if (!loadConfig().showUsage) return () => {};
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let failures = 0;
+  let stopped = false;
   const refresh = () => {
     void collectUsage()
       .then((report) => {
         badgeCache = formatUsageBadge(report);
+        // A null badge means no provider had anything to say — treat it as a
+        // failed reading for pacing, even though nothing threw.
+        failures = badgeCache === null ? failures + 1 : 0;
       })
       .catch(() => {
         badgeCache = null;
+        failures += 1;
+      })
+      .finally(() => {
+        if (stopped) return;
+        timer = setTimeout(refresh, usagePollDelay(failures));
+        timer.unref?.();
       });
   };
   refresh();
-  const timer = setInterval(refresh, BADGE_REFRESH_MS);
-  timer.unref?.();
   return () => {
-    clearInterval(timer);
+    stopped = true;
+    if (timer) clearTimeout(timer);
     badgeCache = null;
   };
 }

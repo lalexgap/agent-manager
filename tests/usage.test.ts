@@ -14,6 +14,7 @@ import {
   readCodexUsage,
   usageBar,
   usageLevel,
+  usagePollDelay,
   type UsageReport,
 } from "../src/usage";
 
@@ -115,6 +116,22 @@ describe("readCodexUsage", () => {
       snapshot("2026-08-17T11:00:00.000Z", 12),
     ]);
     expect(readCodexUsage().windows[0]!.utilization).toBe(12);
+  });
+
+  test("a trailing null-limits event doesn't discard the readings behind it", () => {
+    // Codex writes token_count events with "rate_limits":null; ending a
+    // session on one must not make the whole log invisible.
+    writeSession("rollout-a.jsonl", [
+      snapshot("2026-08-17T10:00:00.000Z", 12),
+      JSON.stringify({
+        timestamp: "2026-08-17T10:05:00.000Z",
+        type: "event_msg",
+        payload: { type: "token_count", rate_limits: null },
+      }),
+    ]);
+    const usage = readCodexUsage();
+    expect(usage.windows[0]!.utilization).toBe(12);
+    expect(usage.observedAt).toBe("2026-08-17T10:00:00.000Z");
   });
 
   test("explains itself when codex has never reported limits", () => {
@@ -250,6 +267,14 @@ describe("formatting", () => {
       ],
     };
     expect(formatUsageBadge(stale, now)).toBe("codex 16%/wk?");
+  });
+
+  test("usagePollDelay backs off while readings keep coming back empty", () => {
+    expect(usagePollDelay(0)).toBe(60_000);
+    expect(usagePollDelay(1)).toBe(120_000);
+    expect(usagePollDelay(3)).toBe(480_000);
+    // Capped, so a hub left open for days doesn't drift into never asking.
+    expect(usagePollDelay(50)).toBe(900_000);
   });
 
   test("no data at all yields no badge", () => {
