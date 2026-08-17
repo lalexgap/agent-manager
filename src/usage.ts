@@ -65,34 +65,54 @@ interface ClaudeOAuth {
   subscriptionType?: string;
 }
 
-// macOS Claude Code keeps credentials in the login keychain instead of a
-// dotfile; the JSON payload is identical.
-function keychainCredentials(): string | null {
-  if (platform() !== "darwin") return null;
-  const result = Bun.spawnSync(["security", "find-generic-password", "-s", "Claude Code-credentials", "-w"]);
-  if (result.exitCode !== 0) return null;
-  const text = result.stdout.toString().trim();
-  return text || null;
+export interface CredentialRead {
+  auth: ClaudeOAuth | null;
+  // Set when credentials exist but this process may not read them, which is
+  // a different answer than "not signed in" and deserves a different message.
+  unavailable?: string;
 }
 
-export function claudeOAuth(): ClaudeOAuth | null {
+// `security` exits 44 when the item genuinely isn't there; anything else
+// (36 = interaction not allowed) means it exists but is out of reach.
+const KEYCHAIN_ITEM_NOT_FOUND = 44;
+
+// macOS Claude Code keeps credentials in the login keychain instead of a
+// dotfile; the JSON payload is identical. Over ssh the keychain is locked to
+// the GUI session and `security` has no way to prompt, so this reports the
+// lock rather than pretending nobody is signed in.
+function keychainCredentials(): { raw: string | null; locked: boolean } {
+  if (platform() !== "darwin") return { raw: null, locked: false };
+  const result = Bun.spawnSync(["security", "find-generic-password", "-s", "Claude Code-credentials", "-w"]);
+  if (result.exitCode === 0) return { raw: result.stdout.toString().trim() || null, locked: false };
+  return { raw: null, locked: result.exitCode !== KEYCHAIN_ITEM_NOT_FOUND };
+}
+
+export function readClaudeCredentials(): CredentialRead {
   let raw: string | null = null;
   const file = claudeCredentialsFile();
   if (existsSync(file)) {
     try {
       raw = readFileSync(file, "utf8");
     } catch {
-      return null;
+      return { auth: null, unavailable: "credentials file unreadable" };
     }
   } else {
-    raw = keychainCredentials();
+    const keychain = keychainCredentials();
+    if (keychain.locked) {
+      return { auth: null, unavailable: "macOS keychain is locked to the desktop session (try a local terminal, not ssh)" };
+    }
+    raw = keychain.raw;
   }
-  if (!raw) return null;
+  if (!raw) return { auth: null };
   try {
-    return JSON.parse(raw).claudeAiOauth ?? null;
+    return { auth: JSON.parse(raw).claudeAiOauth ?? null };
   } catch {
-    return null;
+    return { auth: null };
   }
+}
+
+export function claudeOAuth(): ClaudeOAuth | null {
+  return readClaudeCredentials().auth;
 }
 
 // Only the windows a Claude subscription actually meters. The endpoint also
@@ -130,26 +150,29 @@ export function parseClaudeUsage(payload: unknown, plan?: string): ProviderUsage
 
 // How long to wait before re-reading credentials that gave us nothing usable.
 const OAUTH_RETRY_MS = 5 * 60_000;
-let oauthCache: { value: ClaudeOAuth | null; readAt: number } | null = null;
+let oauthCache: { value: CredentialRead; readAt: number } | null = null;
 
-// On macOS the credentials live in the login keychain, so claudeOAuth() spawns
+// On macOS the credentials live in the login keychain, so reading them spawns
 // `security` synchronously — on the UI's event loop, once per poll, with a
 // modal prompt possible if the keychain ACL doesn't trust it. A token good for
 // hours is read once; anything unusable is retried on a slow timer instead.
-function cachedClaudeOAuth(): ClaudeOAuth | null {
+function cachedClaudeCredentials(): CredentialRead {
   const cached = oauthCache;
   if (cached) {
-    const expiresAt = cached.value?.expiresAt;
+    const expiresAt = cached.value.auth?.expiresAt;
     if (expiresAt && expiresAt > Date.now()) return cached.value;
     if (Date.now() - cached.readAt < OAUTH_RETRY_MS) return cached.value;
   }
-  const value = claudeOAuth();
+  const value = readClaudeCredentials();
   oauthCache = { value, readAt: Date.now() };
   return value;
 }
 
 export async function fetchClaudeUsage(): Promise<ProviderUsage> {
-  const auth = cachedClaudeOAuth();
+  const { auth, unavailable } = cachedClaudeCredentials();
+  if (unavailable) {
+    return { provider: "claude", windows: [], error: unavailable };
+  }
   if (!auth?.accessToken) {
     return { provider: "claude", windows: [], error: "not signed in (run `claude` to authenticate)" };
   }

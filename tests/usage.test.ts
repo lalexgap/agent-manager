@@ -11,6 +11,7 @@ import {
   isStale,
   parseClaudeUsage,
   parseCodexRateLimits,
+  readClaudeCredentials,
   readCodexUsage,
   usageBar,
   usageLevel,
@@ -176,6 +177,13 @@ describe("claudeOAuth", () => {
     mkdirSync(join(home, ".claude"), { recursive: true });
     writeFileSync(join(home, ".claude", ".credentials.json"), "{nope");
     expect(claudeOAuth()).toBeNull();
+  });
+
+  test("an absent credentials file is 'not signed in', not an access problem", () => {
+    // On linux there is no keychain to fall back to, so this is unambiguous.
+    const read = readClaudeCredentials();
+    expect(read.auth).toBeNull();
+    if (process.platform !== "darwin") expect(read.unavailable).toBeUndefined();
   });
 });
 
