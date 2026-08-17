@@ -43,6 +43,7 @@ import { serveCommand, tokenCommand } from "./commands/serve";
 import { showPalettePopup, sidebarCommand, uiCommand } from "./commands/ui";
 import { watchCommand } from "./commands/watch";
 import { summaryCommand } from "./commands/summary";
+import { usageCommand } from "./commands/usage";
 import { deliverCommand } from "./deliver";
 import { runForegroundDaemon } from "./daemon";
 import { runTunnel } from "./tunnel";
@@ -90,6 +91,13 @@ usage:
                               --role unassigned selects agents without a role
   am summary [--json]         prioritized fleet report: attention, active,
                               idle, exited, and unreachable hosts
+  am usage [--json] [--claude | --codex]
+                              quota headroom per provider — the numbers behind
+                              claude's /usage and codex's /status, read without
+                              disturbing any agent. Limits are per account, so
+                              this describes the whole fleet. Codex's reading
+                              comes from its session log and is labelled with
+                              when it was taken
   am concierge [question...]  open the fleet concierge: a reserved agent whose
                               only job is fleet management — "which agent
                               worked on X?", status summaries, safe revives
@@ -205,7 +213,7 @@ interface ParsedArgs {
   flags: Record<string, string | boolean>;
 }
 
-const VALUE_FLAGS = new Set(["m", "message", "dir", "worktree", "model", "effort", "role", "sort", "description", "to", "out", "host", "H", "port", "bind", "from", "report-to", "file", "timeout", "ssh-port", "limit", "agent-days", "trash-days", "status", "lines"]);
+const VALUE_FLAGS = new Set(["m", "message", "dir", "worktree", "model", "effort", "role", "sort", "description", "to", "out", "host", "H", "port", "bind", "from", "report-to", "file", "timeout", "ssh-port", "limit", "agent-days", "trash-days", "status", "lines", "provider"]);
 const OPTIONAL_VALUE_FLAGS = new Set(["resume"]);
 
 function parseArgs(argv: string[]): ParsedArgs {
@@ -549,6 +557,12 @@ async function main(): Promise<void> {
       break;
     case "summary":
       summaryCommand({ json: !!args.flags.json, localOnly: !!args.flags["local-only"] });
+      break;
+    case "usage":
+      await usageCommand({
+        json: !!args.flags.json,
+        provider: args.flags.codex ? "codex" : args.flags.claude ? "claude" : (args.flags.provider as string | undefined),
+      });
       break;
     case "concierge":
       await conciergeCommand({

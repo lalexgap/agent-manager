@@ -43,6 +43,7 @@ am new gpt-take --codex --no-jump                # use Codex, stay in the hub
 am                         # open the hub
 am ls                      # list agents (--json; --role/--sort for scripts)
 am summary                 # prioritized attention/active/idle fleet report
+am usage                   # quota headroom for claude and codex
 am j api                   # jump by name prefix
 am -                       # return to the previous agent
 ```
@@ -146,6 +147,29 @@ am rm api                          # remove an agent; state remains restorable
 am restore api                     # restore a removed agent
 am gc                              # preview cleanup (--apply to run it)
 ```
+
+### Quota headroom
+
+```sh
+am usage                           # how much of each provider's quota is left
+am usage --json                    # for scripts
+am usage --codex                   # one provider
+```
+
+```
+claude · max
+  5h    ██░░░░░░░░░░  13%  resets in 3h16m
+  week  █████████░░░  76%  resets in 56m
+
+codex · prolite  (as of 09:54, 8m ago)
+  week  ██░░░░░░░░░░  16%  resets in 2d
+```
+
+These are the same numbers Claude Code shows under `/usage` and Codex under `/status`, read without touching any agent's pane — checking never interrupts a turn. Limits are per account, so one reading describes the whole fleet no matter how many agents or hosts are running.
+
+Claude's come live from its OAuth API using the credentials `claude` already stored. Codex has no such endpoint, so its figures come from the rate-limit snapshot it writes to its session log on every turn — meaning they are only as fresh as the last codex turn **on this machine**, which is why they carry an "as of" note and are marked stale after 30 minutes.
+
+The hub and picker show a compact version in the key bar (`claude 13%/5h 76%/wk · codex 16%/wk`, `?` marking a stale reading), refreshed once a minute. Set `"showUsage": false` in `~/.agent-manager/config.json` to turn that off and keep the UI entirely offline.
 
 Run `am --help` for the complete command and option reference.
 

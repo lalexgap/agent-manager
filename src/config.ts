@@ -85,6 +85,10 @@ export interface Config {
   // sshd (reverse SSH). The server addresses the tunneled host via an ssh Host
   // alias pointing at localhost:<tunnelPort>.
   tunnelPort: number;
+  // Show provider quota headroom (see `am usage`) in the picker/hub footer.
+  // Costs one Claude usage request a minute while the UI is open; set false
+  // to keep the UI entirely offline.
+  showUsage: boolean;
   // `am gc` retention: agents whose session is gone and untouched for this
   // many days are reaped (to trash); trash snapshots older than gcTrashDays
   // are purged. Per-run override: --agent-days / --trash-days.
@@ -108,6 +112,7 @@ const DEFAULTS: Config = {
   outboxPollSeconds: 2,
   outboxPollMaxSeconds: 30,
   tunnelPort: 2222,
+  showUsage: true,
   gcAgentDays: 7,
   gcTrashDays: 30,
 };

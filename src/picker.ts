@@ -1,5 +1,6 @@
 import { completeDir, completeDirRemote } from "./dirComplete";
 import { localAgentMatches, search } from "./search";
+import { startUsagePolling, usageBadge } from "./usage";
 import { effortsForModel, findModel, type ModelOption, type ProviderCatalog } from "./catalog";
 
 export interface PickerItem {
@@ -813,6 +814,20 @@ function keyBar(mode: Mode, handlers: PickerHandlers, width: number, active = tr
     }
   }
   if (line) lines.push(line);
+  // Quota headroom rides the right edge of the last bar line when there's
+  // room — key hints always win the space — and takes a line of its own when
+  // there isn't, rather than being silently dropped in a narrow sidebar.
+  const badge = usageBadge();
+  if (badge) {
+    const painted = `${THEME.faint}${badge}${THEME.sidebar}`;
+    const last = lines[lines.length - 1];
+    if (last !== undefined && visibleWidth(last) + visibleWidth(painted) + 2 <= width) {
+      lines[lines.length - 1] = alignAnsi(last, painted, width);
+    } else if (visibleWidth(painted) + 1 <= width) {
+      // Indented to sit under the key hints, which start inside the label chip.
+      lines.push(` ${painted}`);
+    }
+  }
   return lines.map((text) => ({ text, style: THEME.sidebar }));
 }
 
@@ -826,7 +841,15 @@ export function tmuxKeyBar(mode: Mode, handlers: PickerHandlers, active = true):
     `#[bg=#24283b,fg=#c0caf5] ${key} #[bg=#16161e,fg=#565f89] ${hintLabel}`;
   const right = hints.length && hints[hints.length - 1]!.key === "?" ? hints.pop()! : null;
   const left = [`#[bg=#7aa2f7,fg=#16161e,bold] ${label} #[nobold]#[bg=#16161e]`, ...hints.map(token)].join("  ");
-  return right ? `${left}#[align=right]${token(right)} ` : left;
+  // The hub's status line spans the whole window, so the badge gets a home on
+  // the right without competing with the hints. `#` is doubled: tmux would
+  // otherwise read it as the start of a format substitution.
+  const badge = usageBadge();
+  const trailing = [
+    ...(badge ? [`#[bg=#16161e,fg=#414868] ${badge.replaceAll("#", "##")} `] : []),
+    ...(right ? [token(right)] : []),
+  ].join("");
+  return trailing ? `${left}#[align=right]${trailing} ` : left;
 }
 
 export function hasEditActions(handlers: PickerHandlers): boolean {
@@ -1608,6 +1631,9 @@ export async function pick(
     render();
   }, RENDER_REFRESH_MS);
   const loadRefresh = setInterval(reload, handlers.subscribe ? EVENT_FALLBACK_REFRESH_MS : RENDER_REFRESH_MS);
+  // Provider quota for the key bar. Polled only while the UI is up; the
+  // one-second repaint picks up each new reading.
+  const stopUsagePolling = startUsagePolling();
   const onResize = () => render();
   process.stdout.on("resize", onResize);
 
@@ -1622,6 +1648,7 @@ export async function pick(
       unsubscribe();
       clearInterval(renderRefresh);
       clearInterval(loadRefresh);
+      stopUsagePolling();
       process.stdout.off("resize", onResize);
       process.stdin.off("data", onData);
       process.stdin.setRawMode(false);
