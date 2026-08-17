@@ -3,8 +3,7 @@ import { join } from "node:path";
 import { artifactsCacheDir, sharedRootDir } from "../paths";
 import { loadConfig } from "../config";
 import { splitAddr } from "../comms";
-import { runAsync, sshAmAsync } from "../remote";
-import { shQuote } from "../tmux";
+import { sshAmAsync, sshPullFile } from "../remote";
 import { chooseOpener } from "./click";
 import { relativeTime } from "./ls";
 import { artifactCopyPath, latestArtifacts, readManifest } from "./share";
@@ -173,8 +172,8 @@ export async function openCommand(agentRef: string, selector: string | undefined
     } catch {}
     if (!cacheIsFresh(row, cached)) {
       mkdirSync(join(artifactsCacheDir(), row.host, row.agent), { recursive: true });
-      const scp = await runAsync(["scp", "-p", "-q", `${row.host}:${shQuote(row.path)}`, path], { timeoutMs: 120_000 });
-      if (scp.exitCode !== 0) throw new Error(`pull from ${row.host} failed: ${scp.stderr.trim()}`);
+      const pull = await sshPullFile(row.host, row.path, path, { timeoutMs: 120_000 });
+      if (pull.exitCode !== 0) throw new Error(`pull from ${row.host} failed: ${pull.stderr.trim()}`);
       stampCacheMtime(path, row.mtimeMs);
     }
   }

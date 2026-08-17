@@ -4,7 +4,7 @@ import { expandHome, inboxDir } from "../paths";
 import { matchAgent, resolveAgent } from "../state";
 import { loadConfig } from "../config";
 import { fleetRows, splitFleetKey } from "../fleet";
-import { runAsync, sshAmAsync, sshRunAsync } from "../remote";
+import { sshAmAsync, sshPushFile, sshRunAsync } from "../remote";
 import { shQuote } from "../tmux";
 import { resolveSender } from "../comms";
 import { remoteHome } from "./move";
@@ -94,8 +94,8 @@ export async function sendFileCommand(ref: string, filePath: string, opts: SendF
   const dest = `${destDir}/${fileName}`;
   const mkdir = await sshRunAsync(target.host, `mkdir -p ${shQuote(destDir)}`, { timeoutMs: 8000 });
   if (mkdir.exitCode !== 0) throw new Error(`could not create inbox on ${target.host}: ${mkdir.stderr.trim()}`);
-  const scp = await runAsync(["scp", "-q", src, `${target.host}:${shQuote(dest)}`], { timeoutMs: 120000 });
-  if (scp.exitCode !== 0) throw new Error(`file copy to ${target.host} failed: ${scp.stderr.trim()}`);
+  const push = await sshPushFile(target.host, src, dest, { timeoutMs: 120000 });
+  if (push.exitCode !== 0) throw new Error(`file copy to ${target.host} failed: ${push.stderr.trim()}`);
   console.log(`copied ${fileName} → ${target.host}:${dest}`);
 
   const noteArgs = ["send", target.name, fileNote(opts.message, dest)];

@@ -1,5 +1,10 @@
-import { describe, expect, test } from "bun:test";
-import { isForwardable, stripHostArgs } from "../src/remote";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { isForwardable, stripHostArgs, type SshResult } from "../src/remote";
+
+const remoteModule = new URL("../src/remote.ts", import.meta.url).pathname;
 import { chooseOpener } from "../src/commands/click";
 import { buildNotifyCommand } from "../src/notify";
 import type { Config } from "../src/config";
@@ -22,6 +27,62 @@ describe("isForwardable", () => {
     expect(isForwardable("__deliver")).toBe(false);
     expect(isForwardable("__click")).toBe(false);
     expect(isForwardable("__daemon")).toBe(false);
+  });
+});
+
+// The transfers run against a stub `ssh` on PATH that executes the remote
+// command in a shell, exactly as a real sshd would — so the quoting these
+// helpers do is checked for real, without a network.
+describe("file transfer over ssh", () => {
+  let dir: string;
+  const weird = "a file 'with' spaces.png"; // the names scp's SFTP mode chokes on
+
+  // The helpers spawn whichever `ssh` their own environment resolves, so the
+  // call has to happen in a child process carrying the stubbed PATH.
+  const transfer = (call: string): SshResult => {
+    const script = `import { sshPullFile, sshPushFile } from ${JSON.stringify(remoteModule)};
+      console.log(JSON.stringify(await ${call}));`;
+    const run = Bun.spawnSync(["bun", "-e", script], {
+      env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, AM_SSH_NO_MUX: "1" },
+    });
+    return JSON.parse(run.stdout.toString()) as SshResult;
+  };
+  const q = (s: string) => JSON.stringify(s);
+
+  beforeAll(() => {
+    dir = mkdtempSync(join(tmpdir(), "am-xfer-"));
+    writeFileSync(join(dir, "ssh"), '#!/bin/bash\nexec bash -c "${!#}"\n'); // last arg = the remote command
+    chmodSync(join(dir, "ssh"), 0o755);
+  });
+
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+  test("pull copies bytes verbatim, even for shell-hostile names", () => {
+    const src = join(dir, weird);
+    writeFileSync(src, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff]));
+    const dest = join(dir, "pulled.png");
+    const result = transfer(`sshPullFile("host", ${q(src)}, ${q(dest)}, { timeoutMs: 20000 })`);
+    expect(result.exitCode).toBe(0);
+    expect(readFileSync(dest)).toEqual(readFileSync(src));
+  });
+
+  test("a failed pull reports the remote error and leaves no partial file", () => {
+    const dest = join(dir, "missing.png");
+    const missing = join(dir, "does-not-exist.png");
+    const result = transfer(`sshPullFile("host", ${q(missing)}, ${q(dest)}, { timeoutMs: 20000 })`);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toContain("No such file");
+    expect(existsSync(dest)).toBe(false);
+    expect(existsSync(`${dest}.part`)).toBe(false);
+  });
+
+  test("push writes to the remote path", () => {
+    const src = join(dir, "outgoing.bin");
+    writeFileSync(src, Buffer.from([1, 2, 3, 0, 4]));
+    const dest = join(dir, `pushed ${weird}`);
+    const result = transfer(`sshPushFile("host", ${q(src)}, ${q(dest)}, { timeoutMs: 20000 })`);
+    expect(result.exitCode).toBe(0);
+    expect(readFileSync(dest)).toEqual(readFileSync(src));
   });
 });
 
