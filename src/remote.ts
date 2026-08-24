@@ -74,6 +74,15 @@ export function amCommandString(args: string[]): string {
   return ["am", ...args].map(shQuote).join(" ");
 }
 
+// argv for a long-lived streaming `am <args>` on the host (the `__events`
+// subscription) — the same login-shell + mux setup as sshAm, exposed so the
+// caller can own the child process itself (liveness kills, reconnects). The
+// mux options include ServerAliveInterval/CountMax, so ssh notices a dead
+// TCP path in ~45s on its own; the caller's liveness timer is a backstop.
+export function sshAmStreamArgv(host: string, args: string[]): string[] {
+  return sshArgv(host, amCommandString(args), false);
+}
+
 // Run `am <args>` on a remote host, capturing output. stdin (if given) is
 // piped to the remote command — used by `am move` to stream import payloads.
 export function sshAm(

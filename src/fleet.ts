@@ -2,7 +2,8 @@ import { basename } from "node:path";
 import { agentRows, cachedGitDiffSummary, relativeTime, shortenHome, STATUS_COLORS, STATUS_ICONS, type AgentRow } from "./commands/ls";
 import { CONCIERGE_NAME } from "./providers";
 import { loadConfig, shortHost } from "./config";
-import { sshAm, sshAmAsync, sshRun } from "./remote";
+import { sshAm, sshAmAsync, sshRun, sshRunAsync } from "./remote";
+import { watchRemoteFleetEvents } from "./fleetEvents";
 import { splitAddr } from "./comms";
 import type { PickerItem } from "./picker";
 
@@ -65,51 +66,158 @@ export function fleetRows(opts: { localOnly?: boolean; timeoutMs?: number } = {}
 // instantly, refreshing each host in the background at most every few
 // seconds.
 const REMOTE_REFRESH_MS = 5000;
+// With a live event stream from the host (see startFleetEventWatch), polling
+// is only a consistency net — relax it. Must stay under
+// REMOTE_STALE_GRACE_MS, or okAt could age into "unreachable" between polls.
+const REMOTE_REFRESH_STREAMING_MS = 15_000;
 // A host keeps rendering its last-known rows for this long after its last
 // successful fetch, so one ssh blip doesn't blank it from the hub; past the
 // grace it reads as unreachable (rows stay cached for routing lookups).
 const REMOTE_STALE_GRACE_MS = 30_000;
+// Background fetches must never wedge the cache: an unbounded ssh (host
+// thrashing, dead route) used to leave inFlight set forever, silently
+// freezing that host's rows until "unreachable". Generous vs the one-shot
+// `am ls` 5s, since nothing here blocks a render on it.
+const REMOTE_FETCH_TIMEOUT_MS = 10_000;
 
 interface CacheEntry {
   rows: FleetRow[];
   fetchedAt: number;
-  inFlight: boolean;
+  inFlight: Promise<void> | null;
   okAt: number; // last successful fetch (0 = never)
 }
 
 const cache = new Map<string, CacheEntry>();
 
-function refreshHost(host: string): void {
+// Renderers of the cache (hub sidebar, api server) subscribe to hear when a
+// background fetch actually changed rows — that's what turns a push or poll
+// result into an immediate repaint instead of waiting out the next tick.
+const cacheListeners = new Set<() => void>();
+
+export function subscribeFleetCache(listener: () => void): () => void {
+  cacheListeners.add(listener);
+  return () => cacheListeners.delete(listener);
+}
+
+function notifyCacheChanged(): void {
+  for (const listener of cacheListeners) {
+    try {
+      listener();
+    } catch {
+      // a broken listener must not stall the fetch path
+    }
+  }
+}
+
+// Per-host push-channel health, set by the event watcher: a healthy host
+// polls on the relaxed cadence, since push carries the urgency.
+const streamHealth = new Map<string, boolean>();
+
+function refreshWindowMs(host: string): number {
+  return streamHealth.get(host) ? REMOTE_REFRESH_STREAMING_MS : REMOTE_REFRESH_MS;
+}
+
+async function refreshHost(host: string, opts: { force?: boolean } = {}): Promise<void> {
+  // A forced refresh must observe state from *after* the event that triggered
+  // it: wait out any fetch that predates us, then start a fresh one anyway.
+  for (;;) {
+    const entry = cache.get(host);
+    if (!entry?.inFlight) break;
+    await entry.inFlight;
+    if (!opts.force) return;
+  }
   const entry = cache.get(host);
-  if (entry?.inFlight) return;
-  if (entry && Date.now() - entry.fetchedAt < REMOTE_REFRESH_MS) return;
+  if (!opts.force && entry && Date.now() - entry.fetchedAt < refreshWindowMs(host)) return;
+  const fetchPromise = (async () => {
+    let rows: FleetRow[] | null = null;
+    try {
+      const result = await sshAmAsync(host, ["ls", "--json", "--local-only"], {
+        timeoutMs: REMOTE_FETCH_TIMEOUT_MS,
+      });
+      rows = result.exitCode === 0 ? parseRows(host, result.stdout) : null;
+    } catch {
+      rows = null;
+    }
+    const prev = cache.get(host);
+    const changed = rows !== null && JSON.stringify(rows) !== JSON.stringify(prev?.rows ?? []);
+    cache.set(host, {
+      rows: rows ?? prev?.rows ?? [],
+      fetchedAt: Date.now(),
+      okAt: rows !== null ? Date.now() : (prev?.okAt ?? 0),
+      inFlight: null,
+    });
+    if (changed) notifyCacheChanged();
+  })();
   cache.set(host, {
     rows: entry?.rows ?? [],
     fetchedAt: entry?.fetchedAt ?? 0,
     okAt: entry?.okAt ?? 0,
-    inFlight: true,
+    inFlight: fetchPromise,
   });
-  sshAmAsync(host, ["ls", "--json", "--local-only"]).then(
-    (result) => {
-      const rows = result.exitCode === 0 ? parseRows(host, result.stdout) : null;
-      const prev = cache.get(host);
-      cache.set(host, {
-        rows: rows ?? prev?.rows ?? [],
-        fetchedAt: Date.now(),
-        okAt: rows !== null ? Date.now() : (prev?.okAt ?? 0),
-        inFlight: false,
-      });
+  await fetchPromise;
+}
+
+// Debounce/coalesce push events into fetches. One hook firing writes several
+// files back-to-back (state, snapshot, queue) and each is its own event — a
+// single fetch should cover the burst, and an event landing mid-fetch must
+// trigger exactly one follow-up (the in-flight fetch may predate it).
+const EVENT_DEBOUNCE_MS = 150;
+
+// Exported for tests; production wires it to the forced refreshHost below.
+export function createEventPump(
+  refresh: (host: string) => Promise<void>,
+  debounceMs: number = EVENT_DEBOUNCE_MS,
+): (host: string) => void {
+  const state = new Map<string, { dirty: boolean; running: boolean }>();
+  return (host: string) => {
+    let s = state.get(host);
+    if (!s) {
+      s = { dirty: false, running: false };
+      state.set(host, s);
+    }
+    s.dirty = true;
+    if (s.running) return;
+    s.running = true;
+    void (async () => {
+      try {
+        while (s.dirty) {
+          await Bun.sleep(debounceMs);
+          s.dirty = false;
+          await refresh(host).catch(() => {});
+        }
+      } finally {
+        s.running = false;
+      }
+    })();
+  };
+}
+
+const pumpRemoteEvent = createEventPump((host) => refreshHost(host, { force: true }));
+
+// Start the push channel for every configured remote and keep the cache hot
+// from it. Long-lived consumers (the hub sidebar, `am serve`) call this once;
+// one-shot commands never do — they either fetch fresh or read the cache.
+let fleetWatchStop: (() => void) | null = null;
+
+export function startFleetEventWatch(): () => void {
+  if (fleetWatchStop) return fleetWatchStop;
+  const hosts = loadConfig().remotes ?? [];
+  if (hosts.length === 0) return () => {};
+  const stopWatch = watchRemoteFleetEvents(hosts, {
+    onEvent: (host) => pumpRemoteEvent(host),
+    onHealth: (host, healthy) => {
+      streamHealth.set(host, healthy);
+      // On (re)connect, refresh immediately: any events during the outage
+      // are gone, so the first fetch is the catch-up.
+      if (healthy) pumpRemoteEvent(host);
     },
-    () => {
-      const prev = cache.get(host);
-      cache.set(host, {
-        rows: prev?.rows ?? [],
-        fetchedAt: Date.now(),
-        okAt: prev?.okAt ?? 0,
-        inFlight: false,
-      });
-    },
-  );
+  });
+  fleetWatchStop = () => {
+    fleetWatchStop = null;
+    streamHealth.clear();
+    stopWatch();
+  };
+  return fleetWatchStop;
 }
 
 export function cachedFleetRows(): Fleet {
@@ -122,7 +230,7 @@ export function cachedFleetRows(): Fleet {
     } else if (entry && !entry.inFlight) {
       unreachable.push(host);
     }
-    refreshHost(host);
+    void refreshHost(host);
   }
   return { rows, unreachable };
 }
@@ -168,20 +276,17 @@ export function cachedRemotePreview(host: string, agentName: string): string[] |
   return previewCache.get(key)?.lines ?? null;
 }
 
+const PREVIEW_TIMEOUT_MS = 8000;
+
 async function refreshPreview(key: string, host: string, agentName: string): Promise<void> {
-  try {
-    // Raw tmux over ssh (no login shell needed): capture the agent's pane.
-    const proc = Bun.spawn(["ssh", host, "--", `tmux capture-pane -p -e -t '=agentmgr-${agentName}:'`], {
-      stdin: "ignore",
-      stdout: "pipe",
-      stderr: "ignore",
-    });
-    const [stdout, exitCode] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
-    const lines = exitCode === 0 ? stdout.replace(/\n+$/, "").split("\n") : null;
-    previewCache.set(key, { lines, fetchedAt: Date.now(), inFlight: false });
-  } catch {
-    previewCache.set(key, { lines: null, fetchedAt: Date.now(), inFlight: false });
-  }
+  // Raw tmux over ssh (no login shell needed): capture the agent's pane.
+  // Timed out so a wedged host can't leave the entry inFlight forever, and
+  // via sshRunAsync so it rides the shared mux connection.
+  const result = await sshRunAsync(host, `tmux capture-pane -p -e -t '=agentmgr-${agentName}:'`, {
+    timeoutMs: PREVIEW_TIMEOUT_MS,
+  }).catch(() => null);
+  const lines = result && result.exitCode === 0 ? result.stdout.replace(/\n+$/, "").split("\n") : null;
+  previewCache.set(key, { lines, fetchedAt: Date.now(), inFlight: false });
 }
 
 // Sidebar grouping: by host (local first, then each remote) or by project

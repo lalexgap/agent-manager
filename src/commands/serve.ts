@@ -2,6 +2,7 @@ import { loadConfig } from "../config";
 import { apiTokenFile } from "../paths";
 import { createApiToken, loadOrCreateApiToken, startApiServer } from "../server";
 import { ensureDaemon } from "../daemon";
+import { startFleetEventWatch } from "../fleet";
 
 // `am token` — print the API bearer token (creating one on first use).
 export function tokenCommand(opts: { reset?: boolean }): void {
@@ -16,6 +17,10 @@ export async function serveCommand(opts: { port?: number; bind?: string }): Prom
   const config = loadConfig();
   const token = loadOrCreateApiToken();
   if (!(await ensureDaemon())) throw new Error("daemon failed to start");
+  // Keep the fleet cache hot from remote push events, so /api/agents and
+  // /api/summary serve fresh rows instead of whatever the last request-time
+  // poll happened to leave behind.
+  startFleetEventWatch();
 
   const handle = startApiServer({
     port: opts.port ?? config.apiPort,
