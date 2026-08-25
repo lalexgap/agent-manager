@@ -144,6 +144,44 @@ describe("watchRemoteFleetEvents", () => {
     expect(fakes.length).toBe(1);
   });
 
+  test("short-lived ready connections keep compounding backoff; stable ones reset it", async () => {
+    // A crash-looping remote daemon says ready then dies instantly — the
+    // redial gaps must grow. With stableMs=0 the same pattern counts as
+    // stable and redials at the floor.
+    const gaps = async (stableMs: number): Promise<number[]> => {
+      const spawns: number[] = [];
+      const stop = watchRemoteFleetEvents(
+        ["srv"],
+        { onEvent: () => {} },
+        {
+          spawn: () => {
+            spawns.push(Date.now());
+            const fake = fakeStream();
+            fake.handle.push(READY);
+            fake.handle.close();
+            return fake.stream;
+          },
+          reconnectMinMs: 20,
+          reconnectMaxMs: 300,
+          livenessMs: 60_000,
+          stableMs,
+        },
+      );
+      try {
+        await until(() => spawns.length >= 4);
+      } finally {
+        stop();
+      }
+      return [spawns[1]! - spawns[0]!, spawns[2]! - spawns[1]!, spawns[3]! - spawns[2]!];
+    };
+
+    const compounding = await gaps(10_000);
+    expect(compounding[2]!).toBeGreaterThanOrEqual(compounding[0]! * 2);
+
+    const resetting = await gaps(0);
+    expect(resetting[2]!).toBeLessThan(60);
+  });
+
   test("a stream that never says ready reports no health transitions", async () => {
     const health: [string, boolean][] = [];
     let spawns = 0;
