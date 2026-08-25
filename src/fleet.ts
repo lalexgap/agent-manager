@@ -67,8 +67,10 @@ export function fleetRows(opts: { localOnly?: boolean; timeoutMs?: number } = {}
 // seconds.
 const REMOTE_REFRESH_MS = 5000;
 // With a live event stream from the host (see startFleetEventWatch), polling
-// is only a consistency net — relax it. Must stay under
-// REMOTE_STALE_GRACE_MS, or okAt could age into "unreachable" between polls.
+// is only a consistency net — relax it. Aging okAt past the stale grace is
+// fine here, because a healthy stream itself counts as reachability (see
+// hostRenderState); the grace only governs hosts on the tight poll, where
+// two windows plus a fetch timeout fit inside it.
 const REMOTE_REFRESH_STREAMING_MS = 15_000;
 // A host keeps rendering its last-known rows for this long after its last
 // successful fetch, so one ssh blip doesn't blank it from the hub; past the
@@ -117,7 +119,31 @@ function refreshWindowMs(host: string): number {
   return streamHealth.get(host) ? REMOTE_REFRESH_STREAMING_MS : REMOTE_REFRESH_MS;
 }
 
-async function refreshHost(host: string, opts: { force?: boolean } = {}): Promise<void> {
+// The ssh fetch behind refreshHost — the one seam tests can't reach through
+// a real ssh, so it is swappable.
+async function fetchRowsOverSsh(host: string): Promise<FleetRow[] | null> {
+  try {
+    const result = await sshAmAsync(host, ["ls", "--json", "--local-only"], {
+      timeoutMs: REMOTE_FETCH_TIMEOUT_MS,
+    });
+    return result.exitCode === 0 ? parseRows(host, result.stdout) : null;
+  } catch {
+    return null;
+  }
+}
+
+let fetchRowsImpl = fetchRowsOverSsh;
+
+export function setFleetFetchForTests(fn?: (host: string) => Promise<FleetRow[] | null>): void {
+  fetchRowsImpl = fn ?? fetchRowsOverSsh;
+}
+
+export function resetFleetCacheForTests(): void {
+  cache.clear();
+  streamHealth.clear();
+}
+
+export async function refreshHost(host: string, opts: { force?: boolean } = {}): Promise<void> {
   // A forced refresh must observe state from *after* the event that triggered
   // it: wait out any fetch that predates us, then start a fresh one anyway.
   for (;;) {
@@ -129,15 +155,7 @@ async function refreshHost(host: string, opts: { force?: boolean } = {}): Promis
   const entry = cache.get(host);
   if (!opts.force && entry && Date.now() - entry.fetchedAt < refreshWindowMs(host)) return;
   const fetchPromise = (async () => {
-    let rows: FleetRow[] | null = null;
-    try {
-      const result = await sshAmAsync(host, ["ls", "--json", "--local-only"], {
-        timeoutMs: REMOTE_FETCH_TIMEOUT_MS,
-      });
-      rows = result.exitCode === 0 ? parseRows(host, result.stdout) : null;
-    } catch {
-      rows = null;
-    }
+    const rows = await fetchRowsImpl(host).catch(() => null);
     const prev = cache.get(host);
     const changed = rows !== null && JSON.stringify(rows) !== JSON.stringify(prev?.rows ?? []);
     cache.set(host, {
@@ -162,17 +180,22 @@ async function refreshHost(host: string, opts: { force?: boolean } = {}): Promis
 // single fetch should cover the burst, and an event landing mid-fetch must
 // trigger exactly one follow-up (the in-flight fetch may predate it).
 const EVENT_DEBOUNCE_MS = 150;
+// Floor between consecutive event-driven fetches for one host, so a remote
+// with continuous file churn (several busy agents) can't hold the hub in a
+// permanent fetch loop — worst case is one ssh exec per second per host.
+const EVENT_FETCH_SPACING_MS = 1000;
 
 // Exported for tests; production wires it to the forced refreshHost below.
 export function createEventPump(
   refresh: (host: string) => Promise<void>,
   debounceMs: number = EVENT_DEBOUNCE_MS,
+  spacingMs: number = EVENT_FETCH_SPACING_MS,
 ): (host: string) => void {
-  const state = new Map<string, { dirty: boolean; running: boolean }>();
+  const state = new Map<string, { dirty: boolean; running: boolean; lastFetchAt: number }>();
   return (host: string) => {
     let s = state.get(host);
     if (!s) {
-      s = { dirty: false, running: false };
+      s = { dirty: false, running: false, lastFetchAt: 0 };
       state.set(host, s);
     }
     s.dirty = true;
@@ -182,7 +205,12 @@ export function createEventPump(
       try {
         while (s.dirty) {
           await Bun.sleep(debounceMs);
+          // The floor spans pump runs: the first event fetches after just the
+          // debounce, sustained churn is held to one fetch per spacing.
+          const wait = s.lastFetchAt + spacingMs - Date.now();
+          if (wait > 0) await Bun.sleep(wait);
           s.dirty = false;
+          s.lastFetchAt = Date.now();
           await refresh(host).catch(() => {});
         }
       } finally {
@@ -220,16 +248,31 @@ export function startFleetEventWatch(): () => void {
   return fleetWatchStop;
 }
 
+// How a host should render right now. A fresh okAt proves reachability, but
+// so does a live push stream — without that, a single slow poll under the
+// relaxed streaming cadence (15s window + 10s fetch timeout can exceed the
+// 30s grace) would flap a perfectly healthy host to "unreachable".
+// Exported for tests.
+export function hostRenderState(
+  entry: { okAt: number; inFlight: unknown } | undefined,
+  streamHealthy: boolean,
+  now: number,
+): "rows" | "unreachable" | "pending" {
+  if (entry && entry.okAt > 0 && (now - entry.okAt < REMOTE_STALE_GRACE_MS || streamHealthy)) {
+    return "rows";
+  }
+  if (entry && !entry.inFlight) return "unreachable";
+  return "pending"; // first fetch still in flight — stay silent, don't flap
+}
+
 export function cachedFleetRows(): Fleet {
   const rows: FleetRow[] = agentRows();
   const unreachable: string[] = [];
   for (const host of loadConfig().remotes ?? []) {
     const entry = cache.get(host);
-    if (entry && entry.okAt > 0 && Date.now() - entry.okAt < REMOTE_STALE_GRACE_MS) {
-      rows.push(...entry.rows);
-    } else if (entry && !entry.inFlight) {
-      unreachable.push(host);
-    }
+    const render = hostRenderState(entry, streamHealth.get(host) ?? false, Date.now());
+    if (render === "rows") rows.push(...entry!.rows);
+    else if (render === "unreachable") unreachable.push(host);
     void refreshHost(host);
   }
   return { rows, unreachable };

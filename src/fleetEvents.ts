@@ -29,6 +29,11 @@ export interface RemoteWatchOptions {
   // Kill and redial a stream silent for this long. The daemon emits a
   // keepalive every 15s, so silence means the pipe is dead, not just quiet.
   livenessMs?: number;
+  // A connection must survive this long before a redial goes back to the
+  // minimum backoff — seeing `ready` alone isn't enough, or a crash-looping
+  // remote daemon (which each redial's ensureDaemon would restart) gets
+  // redialed at full speed forever.
+  stableMs?: number;
 }
 
 export function nextBackoffMs(current: number, maxMs: number): number {
@@ -52,6 +57,7 @@ export function watchRemoteFleetEvents(
   const minMs = opts.reconnectMinMs ?? 1000;
   const maxMs = opts.reconnectMaxMs ?? 60_000;
   const livenessMs = opts.livenessMs ?? 45_000;
+  const stableMs = opts.stableMs ?? 30_000;
   let stopped = false;
   const children = new Set<RemoteEventStream>();
 
@@ -61,6 +67,7 @@ export function watchRemoteFleetEvents(
       let ready = false;
       let child: RemoteEventStream | null = null;
       let liveness: ReturnType<typeof setTimeout> | undefined;
+      const connectedAt = Date.now();
       try {
         child = spawn(host);
         children.add(child);
@@ -78,11 +85,8 @@ export function watchRemoteFleetEvents(
             return;
           }
           if (event.type === "ready" && !ready) {
-            // The remote daemon answered: the push channel works. Reset the
-            // backoff and let the poller relax. A flapping daemon therefore
-            // redials at minMs — bounded, and no worse than the hot poll was.
+            // The remote daemon answered: the push channel works.
             ready = true;
-            backoff = minMs;
             hooks.onHealth?.(host, true);
           } else if (event.type === "fleet") {
             hooks.onEvent(host);
@@ -110,6 +114,9 @@ export function watchRemoteFleetEvents(
       }
       if (ready) hooks.onHealth?.(host, false);
       if (stopped) return;
+      // A connection that proved itself (ready + survived a while) earns a
+      // fast redial; anything shorter-lived keeps compounding the backoff.
+      if (ready && Date.now() - connectedAt >= stableMs) backoff = minMs;
       const jitter = 0.9 + Math.random() * 0.2;
       await Bun.sleep(Math.floor(backoff * jitter));
       backoff = nextBackoffMs(backoff, maxMs);

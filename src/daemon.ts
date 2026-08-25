@@ -15,10 +15,11 @@ import { newMsgId } from "./msgid";
 import { createSseParser } from "./sse";
 
 export const DELIVERY_DELAY_MS = 500;
-// A killed session fires no SessionEnd hook, so it stays "working" until this
-// sweep catches it — keep the interval tight (the work is one cheap
-// `tmux has-session` per agent) so a dead agent reads exited quickly.
-const RECONCILE_INTERVAL_MS = 5_000;
+// Deliberately lazy: renderers already derive "dead" live (agentRows checks
+// tmux has-session on every load), so this sweep only persists exited state
+// and self-heals queues — tightening it would just add subprocess churn on a
+// loaded host for no visible freshness.
+const RECONCILE_INTERVAL_MS = 15_000;
 
 // The daemon's stdout/stderr are redirected to daemonLogFile() by ensureDaemon,
 // so these lines are what you find when cross-machine mail stops flowing.
@@ -421,6 +422,10 @@ export async function pipeEvents(write: (chunk: Uint8Array) => unknown): Promise
 }
 
 export function runEventsPipe(): Promise<number> {
+  // EPIPE (the ssh client vanished) can surface as an async stream error
+  // rather than a synchronous throw — exit cleanly either way, matching the
+  // "peer gone means we're done" contract above.
+  process.stdout.on("error", () => process.exit(0));
   return pipeEvents((chunk) => process.stdout.write(chunk));
 }
 
