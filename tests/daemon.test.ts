@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { startDaemonServer, daemonHealth, daemonRequest, nextPollMs, watchDaemonEvents, type DaemonHandle } from "../src/daemon";
+import { pipeEvents, startDaemonServer, daemonHealth, daemonRequest, nextPollMs, watchDaemonEvents, type DaemonHandle } from "../src/daemon";
 import { writeAgent } from "../src/state";
 import { queueAppend } from "../src/queue";
 
@@ -113,6 +113,30 @@ describe("daemon", () => {
     ]);
     expect(decoder.decode(result.value)).toContain('"event":"changed"');
     await reader.cancel();
+  });
+
+  test("pipeEvents relays the raw stream and ends with the daemon", async () => {
+    const chunks: string[] = [];
+    const decoder = new TextDecoder();
+    const done = pipeEvents((chunk) => chunks.push(decoder.decode(chunk)));
+
+    const deadline = Date.now() + 2000;
+    while (!chunks.join("").includes('"type":"ready"')) {
+      if (Date.now() > deadline) throw new Error("timed out waiting for ready");
+      await Bun.sleep(10);
+    }
+    await daemonRequest("/event", {
+      method: "POST",
+      body: JSON.stringify({ agent: "alpha", event: "stop" }),
+    });
+    while (!chunks.join("").includes('"event":"stop"')) {
+      if (Date.now() > deadline) throw new Error("timed out waiting for relayed event");
+      await Bun.sleep(10);
+    }
+
+    daemon.stop();
+    expect(await done).toBe(0);
+    daemon = startDaemonServer(); // hand afterEach a live daemon to stop
   });
 
   test("watchDaemonEvents decodes the stream for picker subscribers", async () => {

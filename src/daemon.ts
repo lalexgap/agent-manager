@@ -12,8 +12,13 @@ import { sshAmAsync } from "./remote";
 import { attribute, seenRecently } from "./comms";
 import { collectedSender, type OutboxEntry } from "./outbox";
 import { newMsgId } from "./msgid";
+import { createSseParser } from "./sse";
 
 export const DELIVERY_DELAY_MS = 500;
+// Deliberately lazy: renderers already derive "dead" live (agentRows checks
+// tmux has-session on every load), so this sweep only persists exited state
+// and self-heals queues — tightening it would just add subprocess churn on a
+// loaded host for no visible freshness.
 const RECONCILE_INTERVAL_MS = 15_000;
 
 // The daemon's stdout/stderr are redirected to daemonLogFile() by ensureDaemon,
@@ -353,29 +358,18 @@ export function watchDaemonEvents(onEvent: (event: FleetEvent) => void): () => v
         if (!response?.ok || !response.body) throw new Error("daemon event stream unavailable");
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
-        let buffer = "";
+        const parse = createSseParser((data) => {
+          try {
+            const event = JSON.parse(data) as FleetEvent | { type: string };
+            if (event.type === "fleet") onEvent(event as FleetEvent);
+          } catch {
+            // Ignore malformed events and keep the subscription alive.
+          }
+        });
         while (!stopped) {
           const { value, done } = await reader.read();
           if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          for (;;) {
-            const boundary = buffer.indexOf("\n\n");
-            if (boundary < 0) break;
-            const block = buffer.slice(0, boundary);
-            buffer = buffer.slice(boundary + 2);
-            const data = block
-              .split("\n")
-              .filter((line) => line.startsWith("data:"))
-              .map((line) => line.slice(5).trimStart())
-              .join("\n");
-            if (!data) continue;
-            try {
-              const event = JSON.parse(data) as FleetEvent | { type: string };
-              if (event.type === "fleet") onEvent(event as FleetEvent);
-            } catch {
-              // Ignore malformed events and keep the subscription alive.
-            }
-          }
+          parse(decoder.decode(value, { stream: true }));
         }
       } catch {
         // Reconnect below unless the caller stopped the subscription.
@@ -395,6 +389,44 @@ export async function daemonHealth(): Promise<{ pid: number; startedAt: string }
   const res = await daemonRequest("/health");
   if (!res?.ok) return null;
   return (await res.json()) as { pid: number; startedAt: string };
+}
+
+// `am __events`: relay the local daemon's SSE stream to a writer, raw bytes —
+// keepalives included, since the subscriber keys liveness off them. This is
+// what a remote hub runs over ssh (`ssh host am __events`) to hear about
+// status changes as they happen instead of polling for them. Returns the exit
+// code: 0 when the stream ended (daemon stopped or the peer went away — the
+// client just reconnects), 1 when no daemon could be reached at all.
+export async function pipeEvents(write: (chunk: Uint8Array) => unknown): Promise<number> {
+  if (!(await ensureDaemon())) {
+    console.error("am: daemon unavailable");
+    return 1;
+  }
+  const response = await daemonRequest("/events", { timeoutMs: 0 });
+  if (!response?.ok || !response.body) {
+    console.error("am: daemon event stream unavailable");
+    return 1;
+  }
+  const reader = response.body.getReader();
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) return 0;
+      if (value) write(value);
+    }
+  } catch {
+    // Reader torn down (daemon restart) or the write hit a closed pipe
+    // (ssh client gone) — either way this end is done.
+    return 0;
+  }
+}
+
+export function runEventsPipe(): Promise<number> {
+  // EPIPE (the ssh client vanished) can surface as an async stream error
+  // rather than a synchronous throw — exit cleanly either way, matching the
+  // "peer gone means we're done" contract above.
+  process.stdout.on("error", () => process.exit(0));
+  return pipeEvents((chunk) => process.stdout.write(chunk));
 }
 
 // Fire-and-forget event ping from a hook. Returns false if the daemon is

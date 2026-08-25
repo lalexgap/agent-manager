@@ -199,7 +199,7 @@ The token-protected API can list, message, create, stop, and resume agents, with
 ## How it works
 
 - **Sessions:** Each agent runs in a detached tmux session, so it keeps working when you leave.
-- **Status and queues:** Provider hooks update status and deliver queued messages after a turn. A small auto-started daemon streams changes to the hub and HTTP API, but is not required for delivery.
+- **Status and queues:** Provider hooks update status and deliver queued messages after a turn. A small auto-started daemon streams changes to the hub and HTTP API, but is not required for delivery. Remote hosts push their changes too: the hub holds one `ssh <host> am __events` subscription per remote and refetches on each event, so a cross-machine status change lands in about an ssh round trip; polling stays on as the fallback for hosts whose `am` predates the subscription.
 - **Persistence:** Tasks, snapshots, queues, and conversation references live as plain files under `~/.agent-manager/`.
 - **Providers:** Claude hooks use generated per-launch settings. Agent Motel installs guarded hooks in `~/.codex/config.toml` for Codex; approve **Trust all and continue** on the first managed launch.
 

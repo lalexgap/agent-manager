@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { agentProvider, listAgents, readAgent, recordAttached, type Provider } from "../state";
 import { attachOrSwitch, hasSession, SCROLL_BINDINGS, shQuote, tmux } from "../tmux";
 import { cliEntrypoint } from "../settings";
-import { cachedRemoteRow, fleetPickerItems, splitFleetKey, toggleGroupMode, toggleSortMode } from "../fleet";
+import { cachedRemoteRow, fleetPickerItems, splitFleetKey, startFleetEventWatch, subscribeFleetCache, toggleGroupMode, toggleSortMode } from "../fleet";
 import { sshAm, sshAmAsync, sshRun } from "../remote";
 import { loadConfig, shortHost } from "../config";
 import { cdHandler, cloneHandler, handoffHandler, moveHandler, renameHandler } from "./fleetActions";
@@ -505,7 +505,20 @@ export async function sidebarCommand(): Promise<void> {
       tmux("set-option", "-t", hubTarget(), "status-format[0]", format);
     },
     palettePopup: showPalettePopup,
-    subscribe: (onUpdate) => watchDaemonEvents(() => onUpdate()),
+    // Three push sources feed the sidebar: local daemon events (state/queue
+    // file changes on this machine), the remote event streams keeping the
+    // fleet cache hot, and the cache's own change signal (which is what a
+    // completed remote fetch fires — the repaint trigger).
+    subscribe: (onUpdate) => {
+      const stops = [
+        watchDaemonEvents(() => onUpdate()),
+        subscribeFleetCache(() => onUpdate()),
+        startFleetEventWatch(),
+      ];
+      return () => {
+        for (const stop of stops) stop();
+      };
+    },
   };
 
   await pick(load, handlers, readLastAttached().current ?? undefined);

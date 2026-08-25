@@ -45,7 +45,7 @@ import { watchCommand } from "./commands/watch";
 import { summaryCommand } from "./commands/summary";
 import { usageCommand } from "./commands/usage";
 import { deliverCommand } from "./deliver";
-import { runForegroundDaemon } from "./daemon";
+import { runEventsPipe, runForegroundDaemon } from "./daemon";
 import { runTunnel } from "./tunnel";
 import { roleCommand } from "./commands/role";
 import { localCatalogs, modelsCommand } from "./commands/models";
@@ -762,6 +762,10 @@ async function main(): Promise<void> {
     case "__daemon":
       runForegroundDaemon();
       return; // keep the process alive serving the socket
+    case "__events":
+      // Relay the daemon's event stream to stdout — the remote end of a
+      // hub's `ssh <host> am __events` push subscription.
+      process.exit(await runEventsPipe());
     case "__click":
       clickCommand(args.positional[0] ?? "", Number(args.positional[1] ?? -1), Number(args.positional[2] ?? -1));
       break;
